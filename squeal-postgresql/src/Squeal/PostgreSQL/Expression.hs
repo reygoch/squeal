@@ -180,6 +180,7 @@ module Squeal.PostgreSQL.Expression
     -- * Re-export
   , (&)
   , NP ((:*), Nil)
+  , SchemumExpression (..)
   ) where
 
 import Control.Category
@@ -1757,15 +1758,14 @@ instance (KnownNat n, PGTyped schema ty)
   => PGTyped schema (nullity ('PGfixarray n ty)) where
     pgtype = fixarray @n (pgtype @schema @ty)
 
-data SchemumExpression (db :: DBType) (schemum :: SchemumType)
+data SchemumExpression (db :: DBType) (schema :: Symbol) (schemum :: SchemumType)
   = UnsafeSchemumExpression { renderSchemumExpression :: ByteString }
   deriving (GHC.Generic,Show,Eq,Ord)
-
 instance (Has "public" db schema, Has alias schema schemum)
-  => IsLabel alias (SchemumExpression db schemum) where
+  => IsLabel alias (SchemumExpression db "public" schemum) where
     fromLabel = UnsafeSchemumExpression $ renderAlias (Alias @alias)
-
 instance (Has schema_alias db schema, Has schemum_alias schema schemum)
-  => IsQualified schema_alias schemum_alias (SchemumExpression db schemum) where
-    schema ! schemum = UnsafeSchemumExpression $
-      renderAlias schema <> "." <> renderAlias schemum
+  => IsQualified schema_alias schemum_alias
+    (SchemumExpression db schema_alias schemum) where
+      schema ! schemum = UnsafeSchemumExpression $
+        renderAlias schema <> "." <> renderAlias schemum

@@ -104,16 +104,16 @@ import Squeal.PostgreSQL.Schema
 statements
 -----------------------------------------}
 
--- | A `Definition` is a statement that changes the schema of the
+-- | A `Definition` is a statement that changes the schemas of the
 -- database, like a `createTable`, `dropTable`, or `alterTable` command.
 -- `Definition`s may be composed using the `>>>` operator.
 newtype Definition
-  (schema0 :: SchemaType)
-  (schema1 :: SchemaType)
+  (db0 :: DBType)
+  (db1 :: DBType)
   = UnsafeDefinition { renderDefinition :: ByteString }
   deriving (GHC.Generic,Show,Eq,Ord,NFData)
 
-instance RenderSQL (Definition schema0 schema1) where
+instance RenderSQL (Definition db0 db1) where
   renderSQL = renderDefinition
 
 instance Category Definition where
@@ -144,17 +144,21 @@ in printSQL setup
 CREATE TABLE "tab" ("a" int NULL, "b" real NULL);
 -}
 createTable
-  :: ( KnownSymbol table
+  :: ( KnownSymbol table_alias
      , columns ~ (col ': cols)
      , SOP.SListI columns
      , SOP.SListI constraints
-     , schema1 ~ Create table ('Table (constraints :=> columns)) schema0 )
-  => Alias table -- ^ the name of the table to add
+     , Has schema_alias db0 schema0
+     , table ~ 'Table (constraints :=> columns)
+     , schema1 ~ Create table_alias table schema0
+     , db1 ~ Alter schema schema1 db0 )
+  => SchemumExpression db1 schema_alias table
+    -- ^ table to add
   -> NP (Aliased (ColumnTypeExpression schema0)) columns
     -- ^ the names and datatype of each column
-  -> NP (Aliased (TableConstraintExpression schema1 table)) constraints
+  -> NP (Aliased (TableConstraintExpression schema1 table_alias)) constraints
     -- ^ constraints that must hold for the table
-  -> Definition schema0 schema1
+  -> Definition db0 db1
 createTable tab columns constraints = UnsafeDefinition $
   "CREATE TABLE" <+> renderCreation tab columns constraints
 
@@ -182,15 +186,17 @@ in printSQL setup
 CREATE TABLE IF NOT EXISTS "tab" ("a" int NULL, "b" real NULL);
 -}
 createTableIfNotExists
-  :: ( Has table schema ('Table (constraints :=> columns))
+  :: ( Has schema_alias db schema
+     , table ~ 'Table (constraints :=> columns)
+     , Has table_alias schema table
      , SOP.SListI columns
      , SOP.SListI constraints )
-  => Alias table -- ^ the name of the table to add
+  => Alias table_alias -- ^ the name of the table to add
   -> NP (Aliased (ColumnTypeExpression schema)) columns
     -- ^ the names and datatype of each column
-  -> NP (Aliased (TableConstraintExpression schema table)) constraints
+  -> NP (Aliased (TableConstraintExpression schema table_alias)) constraints
     -- ^ constraints that must hold for the table
-  -> Definition schema schema
+  -> Definition db db
 createTableIfNotExists tab columns constraints = UnsafeDefinition $
   "CREATE TABLE IF NOT EXISTS"
   <+> renderCreation tab columns constraints
@@ -512,9 +518,9 @@ DROP statements
 -- >>> printSQL definition
 -- DROP TABLE "muh_table";
 dropTable
-  :: Has table schema ('Table t)
-  => Alias table -- ^ table to remove
-  -> Definition schema (Drop table schema)
+  :: (Has schema_alias db schema, Has table_alias schema ('Table t))
+  => SchemumExpression db schema_alias ('Table t) -- ^ table to remove
+  -> Definition db (Alter schema_alias (Drop table_alias schema) db)
 dropTable tab = UnsafeDefinition $ "DROP TABLE" <+> renderAlias tab <> ";"
 
 {-----------------------------------------
@@ -523,10 +529,10 @@ ALTER statements
 
 -- | `alterTable` changes the definition of a table from the schema.
 alterTable
-  :: KnownSymbol alias
-  => Alias alias -- ^ table to alter
-  -> AlterTable alias table schema -- ^ alteration to perform
-  -> Definition schema (Alter alias ('Table table) schema)
+  :: Has schema_alias db schema
+  => SchemumExpression db schema_alias ('Table t) -- ^ table to alter
+  -> AlterTable table_alias table schema -- ^ alteration to perform
+  -> Definition db (Alter schema_alias (Alter table_alias ('Table table) schema) db)
 alterTable tab alteration = UnsafeDefinition $
   "ALTER TABLE"
   <+> renderAlias tab
