@@ -410,10 +410,8 @@ instance (alias0 ~ alias1, alias0 ~ alias2, KnownSymbol alias2)
 
 -- | The `Aliasable` class provides a way to scrap your `Nil`s
 -- in an `NP` list of `Aliased` expressions.
-class KnownSymbol alias => Aliasable alias expression aliased
-  | aliased -> expression
-  , aliased -> alias
-  where as :: expression -> Alias alias -> aliased
+class KnownSymbol alias => Aliasable alias expression aliased where
+  as :: expression -> Alias alias -> aliased
 instance (KnownSymbol alias, alias ~ alias1) => Aliasable alias
   (expression ty)
   (Aliased expression (alias1 ::: ty))
