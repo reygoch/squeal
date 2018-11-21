@@ -1766,7 +1766,7 @@ data SchemumExpression
   = UnsafeSchemumExpression { renderSchemumExpression :: ByteString }
   deriving (GHC.Generic,Show,Eq,Ord)
 instance (Has "public" db schema, Has schemum_alias schema schemum)
-  => IsLabel alias (SchemumExpression "public" schemum_alias db schemum) where
+  => IsLabel schemum_alias (SchemumExpression "public" schemum_alias db schemum) where
     fromLabel = UnsafeSchemumExpression $ renderAlias (Alias @schemum_alias)
 instance (Has schema_alias db schema, Has schemum_alias schema schemum)
   => IsQualified schema_alias schemum_alias
