@@ -151,7 +151,7 @@ createTable
      , table ~ 'Table (constraints :=> columns)
      , schema1 ~ Create table_alias table schema0
      , db1 ~ Alter schema_alias schema1 db0 )
-  => SchemumExpression db1 schema_alias table_alias table
+  => SchemumExpression schema_alias table_alias db1 table
     -- ^ table to add
   -> NP (Aliased (ColumnTypeExpression schema0)) columns
     -- ^ the names and datatype of each column
@@ -190,7 +190,7 @@ createTableIfNotExists
      , SOP.SListI columns
      , columns ~ (col ': cols)
      , SOP.SListI constraints )
-  => SchemumExpression db schema_alias table_alias table -- ^ the name of the table to add
+  => SchemumExpression schema_alias table_alias db table -- ^ the name of the table to add
   -> NP (Aliased (ColumnTypeExpression schema)) columns
     -- ^ the names and datatype of each column
   -> NP (Aliased (TableConstraintExpression schema table_alias)) constraints
@@ -516,7 +516,7 @@ DROP statements
 -- DROP TABLE "muh_table";
 dropTable
   :: Has schema_alias db schema
-  => SchemumExpression db schema_alias table_alias ('Table t) -- ^ table to remove
+  => SchemumExpression schema_alias table_alias db ('Table t) -- ^ table to remove
   -> Definition db (Alter schema_alias (Drop table_alias schema) db)
 dropTable tab = UnsafeDefinition $ "DROP TABLE" <+> renderSchemumExpression tab <> ";"
 
@@ -527,7 +527,7 @@ ALTER statements
 -- | `alterTable` changes the definition of a table from the schema.
 alterTable
   :: Has schema_alias db schema
-  => SchemumExpression db schema_alias table_alias ('Table t) -- ^ table to alter
+  => SchemumExpression schema_alias table_alias db ('Table t) -- ^ table to alter
   -> AlterTable table_alias table schema -- ^ alteration to perform
   -> Definition db (Alter schema_alias (Alter table_alias ('Table table) schema) db)
 alterTable tab alteration = UnsafeDefinition $
@@ -812,12 +812,12 @@ createView
      , Has schema_alias db0 schema0
      , schema1 ~ Create view_alias ('View view) schema0
      , db1 ~ Alter schema_alias schema1 db0 )
-  => SchemumExpression db1 schema_alias view_alias ('View view) -- ^ the name of the view to add
+  => SchemumExpression schema_alias view_alias db1 ('View view) -- ^ the name of the view to add
   -> Query schema '[] view
     -- ^ query
   -> Definition db0 db1
-createView view query = UnsafeDefinition $
-  "CREATE" <+> "VIEW" <+> renderSchemumExpression view <+> "AS"
+createView vw query = UnsafeDefinition $
+  "CREATE" <+> "VIEW" <+> renderSchemumExpression vw <+> "AS"
   <+> renderQuery query <> ";"
 
 -- | Drop a view.
@@ -834,7 +834,7 @@ createView view query = UnsafeDefinition $
 -- DROP VIEW "bc";
 dropView
   :: Has schema_alias db schema
-  => SchemumExpression db schema_alias view_alias ('View v) -- ^ view to remove
+  => SchemumExpression schema_alias view_alias db ('View v) -- ^ view to remove
   -> Definition db (Alter schema_alias (Drop view schema) db)
 dropView v = UnsafeDefinition $ "DROP VIEW" <+> renderSchemumExpression v <> ";"
 
@@ -849,7 +849,7 @@ createTypeEnum
      , ty ~ 'Typedef ('PGenum labels)
      , schema1 ~ Create enum ty schema0
      , db1 ~ Alter schema_alias schema1 db0 )
-  => SchemumExpression db1 schema_alias enum ty
+  => SchemumExpression schema_alias enum db1 ty
   -- ^ name of the user defined enumerated type
   -> NP PGlabel labels
   -- ^ labels of the enumerated type
@@ -866,7 +866,8 @@ createTypeEnum enum labels = UnsafeDefinition $
 -- >>> printSQL $ createTypeEnumFrom @Schwarma #schwarma
 -- CREATE TYPE "schwarma" AS ENUM ('Beef', 'Lamb', 'Chicken');
 createTypeEnumFrom
-  :: ( SOP.Generic hask
+  :: forall hask labels enum schema_alias db0 db1 schema0 schema1 ty.
+     ( SOP.Generic hask
      , labels ~ LabelsPG hask
      , SOP.All KnownSymbol labels
      , KnownSymbol enum
@@ -874,7 +875,7 @@ createTypeEnumFrom
      , ty ~ 'Typedef ('PGenum labels)
      , schema1 ~ Create enum ty schema0
      , db1 ~ Alter schema_alias schema1 db0 )
-  => SchemumExpression db1 schema_alias enum ty
+  => SchemumExpression schema_alias enum db1 ty
   -- ^ name of the user defined enumerated type
   -> Definition db0 db1
 createTypeEnumFrom enum = createTypeEnum enum
@@ -905,7 +906,7 @@ createTypeComposite
      , ty ~ 'Typedef ('PGcomposite fields)
      , schema1 ~ Create comp ty schema0
      , db1 ~ Alter schema_alias schema1 db0 )
-  => SchemumExpression db1 schema_alias comp ty
+  => SchemumExpression schema_alias comp db1 ty
   -- ^ name of the user defined composite type
   -> NP (Aliased (TypeExpression schema)) fields
   -- ^ list of attribute names and data types
@@ -926,19 +927,20 @@ createTypeComposite ty fields = UnsafeDefinition $
 -- >>> printSQL $ createTypeCompositeFrom @Complex #complex
 -- CREATE TYPE "complex" AS ("real" float8, "imaginary" float8);
 createTypeCompositeFrom
-  :: ( fields ~ RowPG hask
-     , SOP.All (FieldTyped schema) fields
+  :: forall hask fields comp schema_alias db0 db1 schema0 schema1 ty.
+     ( fields ~ RowPG hask
+     , SOP.All (FieldTyped schema0) fields
      , KnownSymbol comp 
      , Has schema_alias db0 schema0
-     , ty ~ 'Typedef (PG (Composite hask))
+     , ty ~ 'Typedef ('PGcomposite fields)
      , schema1 ~ Create comp ty schema0
      , db1 ~ Alter schema_alias schema1 db0 )
-  => SchemumExpression db1 schema_alias comp ty
+  => SchemumExpression schema_alias comp db1 ty
   -- ^ name of the user defined composite type
   -> Definition db0 db1
 createTypeCompositeFrom ty = createTypeComposite ty
-  (SOP.hcpure (SOP.Proxy :: SOP.Proxy (FieldTyped schema)) fieldtype
-    :: NP (Aliased (TypeExpression schema)) (RowPG hask))
+  (SOP.hcpure (SOP.Proxy :: SOP.Proxy (FieldTyped schema0)) fieldtype
+    :: NP (Aliased (TypeExpression schema0)) (RowPG hask))
 
 class FieldTyped schema ty where
   fieldtype :: Aliased (TypeExpression schema) ty
@@ -957,7 +959,7 @@ dropType
   :: ( Has schema_alias db0 schema0
      , schema1 ~ Drop tydef schema0
      , db1 ~ Alter schema_alias schema1 db0 )
-  => SchemumExpression db0 schema_alias tydef ('Typedef ty)
+  => SchemumExpression schema_alias tydef db0 ('Typedef ty)
   -- ^ name of the user defined type
   -> Definition db0 db1
 dropType tydef = UnsafeDefinition $ "DROP" <+> "TYPE" <+> renderSchemumExpression tydef <> ";"
