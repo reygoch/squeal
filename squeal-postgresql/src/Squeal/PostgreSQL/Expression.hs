@@ -1758,14 +1758,18 @@ instance (KnownNat n, PGTyped schema ty)
   => PGTyped schema (nullity ('PGfixarray n ty)) where
     pgtype = fixarray @n (pgtype @schema @ty)
 
-data SchemumExpression (db :: DBType) (schema :: Symbol) (schemum :: SchemumType)
+data SchemumExpression
+  (db :: DBType)
+  (schema_alias :: Symbol)
+  (schemum_alias :: Symbol)
+  (schemum :: SchemumType)
   = UnsafeSchemumExpression { renderSchemumExpression :: ByteString }
   deriving (GHC.Generic,Show,Eq,Ord)
-instance (Has "public" db schema, Has alias schema schemum)
-  => IsLabel alias (SchemumExpression db "public" schemum) where
-    fromLabel = UnsafeSchemumExpression $ renderAlias (Alias @alias)
+instance (Has "public" db schema, Has schemum_alias schema schemum)
+  => IsLabel alias (SchemumExpression db "public" schemum_alias schemum) where
+    fromLabel = UnsafeSchemumExpression $ renderAlias (Alias @schemum_alias)
 instance (Has schema_alias db schema, Has schemum_alias schema schemum)
   => IsQualified schema_alias schemum_alias
-    (SchemumExpression db schema_alias schemum) where
+    (SchemumExpression db schema_alias schemum_alias schemum) where
       schema ! schemum = UnsafeSchemumExpression $
         renderAlias schema <> "." <> renderAlias schemum
