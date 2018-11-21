@@ -153,7 +153,7 @@ createTable
      , db1 ~ Alter schema_alias schema1 db0 )
   => SchemumExpression schema_alias table_alias db1 table
     -- ^ table to add
-  -> NP (Aliased (ColumnTypeExpression schema0)) columns
+  -> NP (Aliased (ColumnTypeExpression db0)) columns
     -- ^ the names and datatype of each column
   -> NP (Aliased (TableConstraintExpression schema1 table_alias)) constraints
     -- ^ constraints that must hold for the table
@@ -191,7 +191,7 @@ createTableIfNotExists
      , columns ~ (col ': cols)
      , SOP.SListI constraints )
   => SchemumExpression schema_alias table_alias db table -- ^ the name of the table to add
-  -> NP (Aliased (ColumnTypeExpression schema)) columns
+  -> NP (Aliased (ColumnTypeExpression db)) columns
     -- ^ the names and datatype of each column
   -> NP (Aliased (TableConstraintExpression schema table_alias)) constraints
     -- ^ constraints that must hold for the table
@@ -276,7 +276,7 @@ check
      , HasAll aliases (TableToRow table) subcolumns )
   => NP Alias aliases
   -- ^ specify the subcolumns which are getting checked
-  -> (forall tab. Condition schema '[tab ::: subcolumns] 'Ungrouped '[])
+  -> (forall tab. Condition '["public" ::: schema] '[tab ::: subcolumns] 'Ungrouped '[])
   -- ^ a closed `Condition` on those subcolumns
   -> TableConstraintExpression schema alias ('Check aliases)
 check _cols condition = UnsafeTableConstraintExpression $
@@ -638,7 +638,7 @@ class AddColumn ty where
        , table0 ~ (constraints :=> columns)
        , table1 ~ (constraints :=> Create column ty columns) )
     => Alias column -- ^ column to add
-    -> ColumnTypeExpression schema ty -- ^ type of the new column
+    -> ColumnTypeExpression '["public" ::: schema] ty -- ^ type of the new column
     -> AlterTable tab table1 schema
   addColumn column ty = UnsafeAlterTable $
     "ADD COLUMN" <+> renderAlias column <+> renderColumnTypeExpression ty
@@ -726,7 +726,7 @@ newtype AlterColumn (schema :: SchemaType) (ty0 :: ColumnType) (ty1 :: ColumnTyp
 -- :}
 -- ALTER TABLE "tab" ALTER COLUMN "col" SET DEFAULT 5;
 setDefault
-  :: Expression schema '[] 'Ungrouped '[] ty -- ^ default value to set
+  :: Expression '["public" ::: schema] '[] 'Ungrouped '[] ty -- ^ default value to set
   -> AlterColumn schema (constraint :=> ty) ('Def :=> ty)
 setDefault expression = UnsafeAlterColumn $
   "SET DEFAULT" <+> renderExpression expression
@@ -791,7 +791,7 @@ dropNotNull = UnsafeAlterColumn $ "DROP NOT NULL"
 -- in printSQL definition
 -- :}
 -- ALTER TABLE "tab" ALTER COLUMN "col" TYPE numeric NOT NULL;
-alterType :: ColumnTypeExpression schema ty -> AlterColumn schema ty0 ty
+alterType :: ColumnTypeExpression '["public" ::: schema] ty -> AlterColumn schema ty0 ty
 alterType ty = UnsafeAlterColumn $ "TYPE" <+> renderColumnTypeExpression ty
 
 -- | Create a view.
@@ -915,7 +915,7 @@ createTypeComposite ty fields = UnsafeDefinition $
   "CREATE" <+> "TYPE" <+> renderSchemumExpression ty <+> "AS" <+> parenthesized
   (renderCommaSeparated renderField fields) <> ";"
   where
-    renderField :: Aliased (TypeExpression schema) x -> ByteString
+    renderField :: Aliased (TypeExpression db) x -> ByteString
     renderField (typ `As` alias) =
       renderAlias alias <+> renderTypeExpression typ
 
@@ -929,7 +929,7 @@ createTypeComposite ty fields = UnsafeDefinition $
 createTypeCompositeFrom
   :: forall hask fields comp schema_alias db0 db1 schema0 schema1 ty.
      ( fields ~ RowPG hask
-     , SOP.All (FieldTyped schema0) fields
+     , SOP.All (FieldTyped db0) fields
      , KnownSymbol comp 
      , Has schema_alias db0 schema0
      , ty ~ 'Typedef ('PGcomposite fields)
@@ -939,13 +939,13 @@ createTypeCompositeFrom
   -- ^ name of the user defined composite type
   -> Definition db0 db1
 createTypeCompositeFrom ty = createTypeComposite ty
-  (SOP.hcpure (SOP.Proxy :: SOP.Proxy (FieldTyped schema0)) fieldtype
-    :: NP (Aliased (TypeExpression schema0)) (RowPG hask))
+  (SOP.hcpure (SOP.Proxy :: SOP.Proxy (FieldTyped db0)) fieldtype
+    :: NP (Aliased (TypeExpression db0)) (RowPG hask))
 
-class FieldTyped schema ty where
-  fieldtype :: Aliased (TypeExpression schema) ty
-instance (KnownSymbol alias, PGTyped schema ty)
-  => FieldTyped schema (alias ::: ty) where
+class FieldTyped db ty where
+  fieldtype :: Aliased (TypeExpression db) ty
+instance (KnownSymbol alias, PGTyped db ty)
+  => FieldTyped db (alias ::: ty) where
     fieldtype = pgtype `As` Alias
 
 -- | Drop a type.
@@ -965,15 +965,15 @@ dropType
 dropType tydef = UnsafeDefinition $ "DROP" <+> "TYPE" <+> renderSchemumExpression tydef <> ";"
 
 -- | `ColumnTypeExpression`s are used in `createTable` commands.
-newtype ColumnTypeExpression (schema :: SchemaType) (ty :: ColumnType)
+newtype ColumnTypeExpression (db :: DBType) (ty :: ColumnType)
   = UnsafeColumnTypeExpression { renderColumnTypeExpression :: ByteString }
   deriving (GHC.Generic,Show,Eq,Ord,NFData)
 
 -- | used in `createTable` commands as a column constraint to note that
 -- @NULL@ may be present in a column
 nullable
-  :: TypeExpression schema (nullity ty)
-  -> ColumnTypeExpression schema ('NoDef :=> 'Null ty)
+  :: TypeExpression db (nullity ty)
+  -> ColumnTypeExpression db ('NoDef :=> 'Null ty)
 nullable ty = UnsafeColumnTypeExpression $ renderTypeExpression ty <+> "NULL"
 
 -- | used in `createTable` commands as a column constraint to ensure
