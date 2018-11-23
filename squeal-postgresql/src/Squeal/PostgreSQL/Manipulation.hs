@@ -11,13 +11,17 @@ Squeal data manipulation language.
 {-# LANGUAGE
     DeriveGeneric
   , FlexibleContexts
+  , FlexibleInstances
   , GADTs
   , GeneralizedNewtypeDeriving
   , LambdaCase
+  , MultiParamTypeClasses
   , OverloadedStrings
+  , PatternSynonyms
   , RankNTypes
   , TypeInType
   , TypeOperators
+  , UndecidableInstances
 #-}
 
 module Squeal.PostgreSQL.Manipulation
@@ -28,6 +32,11 @@ module Squeal.PostgreSQL.Manipulation
   , ReturningClause (ReturningStar, Returning)
   , ConflictClause (OnConflictDoRaise, OnConflictDoNothing, OnConflictDoUpdate)
     -- * Insert
+  , insertInto
+  , insertInto_
+  , Insertion (..)
+  , renderInsertion
+  , pattern Values_
   , insertRows
   , insertRow
   , insertRows_
@@ -46,6 +55,7 @@ module Squeal.PostgreSQL.Manipulation
 
 import Control.DeepSeq
 import Data.ByteString hiding (foldr)
+-- import GHC.TypeLits
 
 import qualified Generics.SOP as SOP
 import qualified GHC.Generics as GHC
@@ -68,8 +78,8 @@ let
     '[ "tab" ::: 'Table ('[] :=>
       '[ "col1" ::: 'NoDef :=> 'NotNull 'PGint4
        , "col2" ::: 'Def :=> 'NotNull 'PGint4 ])] '[] '[]
-  manipulation =
-    insertRow_ #tab (Set 2 `as` #col1 :* Default `as` #col2)
+  manipulation = insertInto_ #tab $
+    Values_ (Specific 2 `as` #col1 :* Default' `as` #col2)
 in printSQL manipulation
 :}
 INSERT INTO "tab" ("col1", "col2") VALUES (2, DEFAULT)
@@ -219,6 +229,90 @@ queryStatement q = UnsafeManipulation $ renderQuery q
 {-----------------------------------------
 INSERT statements
 -----------------------------------------}
+
+insertInto
+  :: ( Has tab schema ('Table table)
+     , columns ~ TableToColumns table
+     , row ~ TableToRow table
+     , SOP.SListI columns
+     , SOP.SListI result )
+  => Alias tab
+  -> Insertion schema params columns
+  -> ConflictClause schema table params
+  -> ReturningClause schema params row result
+  -> Manipulation schema params result
+insertInto tab insertion conflict ret = UnsafeManipulation $
+  "INSERT" <+> "INTO" <+> renderAlias tab
+  <+> renderInsertion insertion
+  <+> renderConflictClause conflict
+  <+> renderReturningClause ret
+
+insertInto_
+  :: ( Has tab schema ('Table table)
+    , columns ~ TableToColumns table
+    , row ~ TableToRow table
+    , SOP.SListI columns )
+  => Alias tab
+  -> Insertion schema params columns
+  -> Manipulation schema params '[]
+insertInto_ tab insertion =
+  insertInto tab insertion OnConflictDoRaise (Returning Nil)
+
+data Insertion schema params columns where
+  Values
+    :: SOP.SListI columns
+    => NP (Aliased (Optional (Expression schema '[] 'Ungrouped params))) columns
+    -> [NP (Aliased (Optional (Expression schema '[] 'Ungrouped params))) columns]
+    -> Insertion schema params columns
+  Select
+    :: SOP.SListI columns
+    => NP (Aliased (Optional (Expression schema from 'Ungrouped params))) columns
+    -> TableExpression schema params from 'Ungrouped
+    -> Insertion schema params columns
+
+renderInsertion
+  :: Insertion schema params columns
+  -> ByteString
+renderInsertion = \case
+  Values row0 rows ->
+    parenthesized (renderCommaSeparated renderAliasPart row0)
+    <+> "VALUES"
+    <+> commaSeparated
+          ( parenthesized
+          . renderCommaSeparated renderValuePart <$> row0 : rows )
+  Select row0 tab ->
+    parenthesized (renderCommaSeparated renderAliasPart row0)
+    <+> "SELECT"
+    <+> renderCommaSeparated renderValuePart row0
+    <+> renderTableExpression tab
+  where
+    renderAliasPart, renderValuePart
+      :: Aliased (Optional (Expression schema from grp params)) column -> ByteString
+    renderAliasPart (_ `As` name) = renderAlias name
+    renderValuePart (value `As` _) = renderOptional renderExpression value
+
+pattern Values_
+  :: SOP.SListI columns
+  => NP (Aliased (Optional (Expression schema '[] 'Ungrouped params))) columns
+  -> Insertion schema params columns
+pattern Values_ vals = Values vals []
+
+data Optional expression column where
+  Default' :: Optional expression ('Def :=> ty)
+  Specific :: expression ty -> Optional expression (defness :=> ty)
+-- instance (KnownSymbol alias, column ~ (alias ::: defness :=> ty)) => Aliasable alias
+--   (expression ty)
+--   (Aliased (Optional expression) column)
+--     where
+--       expression `as` alias = Specific expression `As` alias
+
+renderOptional
+  :: (forall ty. expression ty -> ByteString)
+  -> Optional expression column
+  -> ByteString
+renderOptional render = \case
+  Default' -> "DEFAULT"
+  Specific expression -> render expression
 
 -- | Insert multiple rows.
 --
