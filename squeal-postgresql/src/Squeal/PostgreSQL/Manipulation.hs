@@ -12,6 +12,7 @@ Squeal data manipulation language.
     DeriveGeneric
   , FlexibleContexts
   , FlexibleInstances
+  , FunctionalDependencies
   , GADTs
   , GeneralizedNewtypeDeriving
   , LambdaCase
@@ -19,6 +20,7 @@ Squeal data manipulation language.
   , OverloadedStrings
   , PatternSynonyms
   , RankNTypes
+  , TypeFamilies
   , TypeInType
   , TypeOperators
   , UndecidableInstances
@@ -37,12 +39,8 @@ module Squeal.PostgreSQL.Manipulation
   , Insertion (..)
   , renderInsertion
   , pattern Values_
-  , insertRows
-  , insertRow
-  , insertRows_
-  , insertRow_
-  , insertQuery
-  , insertQuery_
+  , Optional (..)
+  , DefaultAliasable (..)
   , renderReturningClause
   , renderConflictClause
     -- * Update
@@ -55,7 +53,7 @@ module Squeal.PostgreSQL.Manipulation
 
 import Control.DeepSeq
 import Data.ByteString hiding (foldr)
--- import GHC.TypeLits
+import GHC.TypeLits
 
 import qualified Generics.SOP as SOP
 import qualified GHC.Generics as GHC
@@ -78,8 +76,8 @@ let
     '[ "tab" ::: 'Table ('[] :=>
       '[ "col1" ::: 'NoDef :=> 'NotNull 'PGint4
        , "col2" ::: 'Def :=> 'NotNull 'PGint4 ])] '[] '[]
-  manipulation = insertInto_ #tab $
-    Values_ (Specific 2 `as` #col1 :* Default' `as` #col2)
+  manipulation = insertInto_ #tab
+    (Values_ (2 `as` #col1 :* defaultAs #col2))
 in printSQL manipulation
 :}
 INSERT INTO "tab" ("col1", "col2") VALUES (2, DEFAULT)
@@ -94,8 +92,8 @@ let
        , "col2" ::: 'NoDef :=> 'NotNull 'PGint4 ])]
     '[ 'NotNull 'PGint4, 'NotNull 'PGint4 ] '[]
   manipulation =
-    insertRow_ #tab
-      (Set (param @1) `as` #col1 :* Set (param @2) `as` #col2)
+    insertInto_ #tab
+      (Values_ ((param @1) `as` #col1 :* (param @2) `as` #col2))
 in printSQL manipulation
 :}
 INSERT INTO "tab" ("col1", "col2") VALUES (($1 :: int4), ($2 :: int4))
@@ -110,7 +108,7 @@ let
        , "col2" ::: 'Def :=> 'NotNull 'PGint4 ])] '[]
     '["fromOnly" ::: 'NotNull 'PGint4]
   manipulation =
-    insertRow #tab (Set 2 `as` #col1 :* Default `as` #col2)
+    insertInto #tab (Values_ (2 `as` #col1 :* defaultAs #col2))
       OnConflictDoRaise (Returning (#col1 `as` #fromOnly))
 in printSQL manipulation
 :}
@@ -126,9 +124,9 @@ let
        , "col2" ::: 'NoDef :=> 'NotNull 'PGint4 ])]
     '[] '[ "sum" ::: 'NotNull 'PGint4]
   manipulation =
-    insertRows #tab
-      (Set 2 `as` #col1 :* Set 4 `as` #col2)
-      [Set 6 `as` #col1 :* Set 8 `as` #col2]
+    insertInto #tab (Values
+      (2 `as` #col1 :* 4 `as` #col2)
+      [6 `as` #col1 :* 8 `as` #col2])
       (OnConflictDoUpdate
         (Set 2 `as` #col1 :* Same `as` #col2)
         [#col1 .== #col2])
@@ -152,8 +150,8 @@ let
        ])
      ] '[] '[]
   manipulation =
-    insertQuery_ #tab
-      (selectStar (from (table (#other_tab `as` #t))))
+    insertInto_ #tab
+      (SelectStar (from (table (#other_tab `as` #t))))
 in printSQL manipulation
 :}
 INSERT INTO "tab" SELECT * FROM "other_tab" AS "t"
@@ -200,7 +198,7 @@ let
      ] '[ 'NotNull 'PGdate] '[]
   manipulation = with
     (deleteFrom #products (#date .< param @1) ReturningStar `as` #deleted_rows)
-    (insertQuery_ #products_deleted (selectStar (from (view (#deleted_rows `as` #t)))))
+    (insertInto_ #products_deleted (SelectStar (from (view (#deleted_rows `as` #t)))))
 in printSQL manipulation
 :}
 WITH "deleted_rows" AS (DELETE FROM "products" WHERE ("date" < ($1 :: date)) RETURNING *) INSERT INTO "products_deleted" SELECT * FROM "deleted_rows" AS "t"
@@ -230,6 +228,13 @@ queryStatement q = UnsafeManipulation $ renderQuery q
 INSERT statements
 -----------------------------------------}
 
+{- |
+When a table is created, it contains no data. The first thing to do
+before a database can be of much use is to insert data. Data is
+conceptually inserted one row at a time. Of course you can also insert
+more than one row, but there is no way to insert less than one row.
+Even if you know only some column values, a complete row must be created.
+-}
 insertInto
   :: ( Has tab schema ('Table table)
      , columns ~ TableToColumns table
@@ -244,14 +249,14 @@ insertInto
 insertInto tab insertion conflict ret = UnsafeManipulation $
   "INSERT" <+> "INTO" <+> renderAlias tab
   <+> renderInsertion insertion
-  <+> renderConflictClause conflict
-  <+> renderReturningClause ret
+  <> renderConflictClause conflict
+  <> renderReturningClause ret
 
 insertInto_
   :: ( Has tab schema ('Table table)
-    , columns ~ TableToColumns table
-    , row ~ TableToRow table
-    , SOP.SListI columns )
+     , columns ~ TableToColumns table
+     , row ~ TableToRow table
+     , SOP.SListI columns )
   => Alias tab
   -> Insertion schema params columns
   -> Manipulation schema params '[]
@@ -261,14 +266,22 @@ insertInto_ tab insertion =
 data Insertion schema params columns where
   Values
     :: SOP.SListI columns
-    => NP (Aliased (Optional (Expression schema '[] 'Ungrouped params))) columns
-    -> [NP (Aliased (Optional (Expression schema '[] 'Ungrouped params))) columns]
+    => NP (Optional (Expression schema '[] 'Ungrouped params)) columns
+    -> [NP (Optional (Expression schema '[] 'Ungrouped params)) columns]
     -> Insertion schema params columns
   Select
     :: SOP.SListI columns
-    => NP (Aliased (Optional (Expression schema from 'Ungrouped params))) columns
-    -> TableExpression schema params from 'Ungrouped
+    => NP (Optional (Expression schema from grp params)) columns
+    -> TableExpression schema params from grp
     -> Insertion schema params columns
+  SelectStar
+    :: (HasUnique table from row, Undefault columns ~ row)
+    => TableExpression schema params from 'Ungrouped
+    -> Insertion schema params columns
+
+type family Undefault columns where
+  Undefault '[] = '[]
+  Undefault ((col ::: defness :=> ty) ': columns) = (col ::: ty) ': Undefault columns
 
 renderInsertion
   :: Insertion schema params columns
@@ -285,138 +298,53 @@ renderInsertion = \case
     <+> "SELECT"
     <+> renderCommaSeparated renderValuePart row0
     <+> renderTableExpression tab
+  SelectStar tab -> "SELECT" <+> "*" <+> renderTableExpression tab
   where
     renderAliasPart, renderValuePart
-      :: Aliased (Optional (Expression schema from grp params)) column -> ByteString
-    renderAliasPart (_ `As` name) = renderAlias name
-    renderValuePart (value `As` _) = renderOptional renderExpression value
+      :: Optional (Expression schema from grp params) column -> ByteString
+    renderAliasPart = \case
+      DefaultAs name -> renderAlias name
+      Specific (_ `As` name) -> renderAlias name
+    renderValuePart = \case
+      DefaultAs _ -> "DEFAULT"
+      Specific (value `As` _) -> renderExpression value
 
 pattern Values_
   :: SOP.SListI columns
-  => NP (Aliased (Optional (Expression schema '[] 'Ungrouped params))) columns
+  => NP (Optional (Expression schema '[] 'Ungrouped params)) columns
   -> Insertion schema params columns
 pattern Values_ vals = Values vals []
 
 data Optional expression column where
-  Default' :: Optional expression ('Def :=> ty)
-  Specific :: expression ty -> Optional expression (defness :=> ty)
--- instance (KnownSymbol alias, column ~ (alias ::: defness :=> ty)) => Aliasable alias
---   (expression ty)
---   (Aliased (Optional expression) column)
---     where
---       expression `as` alias = Specific expression `As` alias
-
-renderOptional
-  :: (forall ty. expression ty -> ByteString)
-  -> Optional expression column
-  -> ByteString
-renderOptional render = \case
-  Default' -> "DEFAULT"
-  Specific expression -> render expression
-
--- | Insert multiple rows.
---
--- When a table is created, it contains no data. The first thing to do
--- before a database can be of much use is to insert data. Data is
--- conceptually inserted one row at a time. Of course you can also insert
--- more than one row, but there is no way to insert less than one row.
--- Even if you know only some column values, a complete row must be created.
-insertRows
-  :: ( SOP.SListI columns
-     , SOP.SListI results
-     , Has tab schema ('Table table)
-     , row ~ TableToRow table
-     , columns ~ TableToColumns table )
-  => Alias tab -- ^ table to insert into
-  -> NP (Aliased (ColumnValue schema '[] params)) columns -- ^ row to insert
-  -> [NP (Aliased (ColumnValue schema '[] params)) columns] -- ^ more rows to insert
-  -> ConflictClause schema table params
-  -- ^ what to do in case of constraint conflict
-  -> ReturningClause schema params row results -- ^ results to return
-  -> Manipulation schema params results
-insertRows tab rw rws conflict returning = UnsafeManipulation $
-  "INSERT" <+> "INTO" <+> renderAlias tab
-    <+> parenthesized (renderCommaSeparated renderAliasPart rw)
-    <+> "VALUES"
-    <+> commaSeparated
-          ( parenthesized
-          . renderCommaSeparated renderColumnValuePart <$> rw:rws )
-    <> renderConflictClause conflict
-    <> renderReturningClause returning
-    where
-      renderAliasPart, renderColumnValuePart
-        :: Aliased (ColumnValue schema '[] params) ty -> ByteString
-      renderAliasPart (_ `As` name) = renderAlias name
-      renderColumnValuePart (value `As` _) = case value of
-        Default -> "DEFAULT"
-        Set expression -> renderExpression expression
-
--- | Insert a single row.
-insertRow
-  :: ( SOP.SListI columns
-     , SOP.SListI results
-     , Has tab schema ('Table table)
-     , row ~ TableToRow table
-     , columns ~ TableToColumns table )
-  => Alias tab -- ^ table to insert into
-  -> NP (Aliased (ColumnValue schema '[] params)) columns -- ^ row to insert
-  -> ConflictClause schema table params
-  -- ^ what to do in case of constraint conflict
-  -> ReturningClause schema params row results -- ^ results to return
-  -> Manipulation schema params results
-insertRow tab rw = insertRows tab rw []
-
--- | Insert multiple rows returning `Nil` and raising an error on conflicts.
-insertRows_
-  :: ( SOP.SListI columns
-     , Has tab schema ('Table table)
-     , columns ~ TableToColumns table )
-  => Alias tab -- ^ table to insert into
-  -> NP (Aliased (ColumnValue schema '[] params)) columns -- ^ row to insert
-  -> [NP (Aliased (ColumnValue schema '[] params)) columns] -- ^ more rows to insert
-  -> Manipulation schema params '[]
-insertRows_ tab rw rws =
-  insertRows tab rw rws OnConflictDoRaise (Returning Nil)
-
--- | Insert a single row returning `Nil` and raising an error on conflicts.
-insertRow_
-  :: ( SOP.SListI columns
-     , Has tab schema ('Table table)
-     , columns ~ TableToColumns table )
-  => Alias tab -- ^ table to insert into
-  -> NP (Aliased (ColumnValue schema '[] params)) columns -- ^ row to insert
-  -> Manipulation schema params '[]
-insertRow_ tab rw = insertRow tab rw OnConflictDoRaise (Returning Nil)
-
--- | Insert a `Query`.
-insertQuery
-  :: ( SOP.SListI columns
-     , SOP.SListI results
-     , Has tab schema ('Table table)
-     , row ~ TableToRow table
-     , columns ~ TableToColumns table )
-  => Alias tab -- ^ table to insert into
-  -> Query schema params (TableToRow table)
-  -> ConflictClause schema table params
-  -- ^ what to do in case of constraint conflict
-  -> ReturningClause schema params row results -- ^ results to return
-  -> Manipulation schema params results
-insertQuery tab query conflict returning = UnsafeManipulation $
-  "INSERT" <+> "INTO" <+> renderAlias tab
-    <+> renderQuery query
-    <> renderConflictClause conflict
-    <> renderReturningClause returning
-
--- | Insert a `Query` returning `Nil` and raising an error on conflicts.
-insertQuery_
-  :: ( SOP.SListI columns
-     , Has tab schema ('Table table)
-     , columns ~ TableToColumns table )
-  => Alias tab -- ^ table to insert into
-  -> Query schema params (TableToRow table)
-  -> Manipulation schema params '[]
-insertQuery_ tab query =
-  insertQuery tab query OnConflictDoRaise (Returning Nil)
+  DefaultAs
+    :: KnownSymbol col
+    => Alias col
+    -> Optional expression (col ::: 'Def :=> ty)
+  Specific
+    :: KnownSymbol col
+    => Aliased expression (col ::: ty)
+    -> Optional expression (col ::: defness :=> ty)
+instance (KnownSymbol alias, column ~ (alias ::: defness :=> ty))
+  => Aliasable alias
+    (expression ty)
+    (Optional expression column)
+      where
+        expression `as` alias = Specific (expression `As` alias)
+instance (KnownSymbol alias, columns ~ '[alias ::: defness :=> ty])
+  => Aliasable alias
+    (expression ty)
+    (NP (Optional expression) columns)
+      where
+        expression `as` alias = Specific (expression `As` alias) :* Nil
+class KnownSymbol alias => DefaultAliasable alias aliased
+  | aliased -> alias
+  where defaultAs :: Alias alias -> aliased
+instance (KnownSymbol col, column ~ (col ::: 'Def :=> ty))
+  => DefaultAliasable col (Optional expression column) where
+    defaultAs = DefaultAs
+instance (KnownSymbol col, columns ~ '[col ::: 'Def :=> ty])
+  => DefaultAliasable col (NP (Optional expression) columns) where
+    defaultAs col = DefaultAs col :* Nil
 
 -- | `ColumnValue`s are values to insert or update in a row.
 -- `Same` updates with the same value.
