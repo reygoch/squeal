@@ -131,6 +131,18 @@ let
     OnConflictDoNothing (Returning Nil)
 :}
 
+>>> :{
+let
+  insertUser' :: Manipulation Schema '[ 'NotNull 'PGtext, 'NotNull 'PGtext ] '[]
+  insertUser' = with
+    ( insertInto #users
+        ( Values_ (defaultAs #id :* param @1 `as` #name) )
+        OnConflictDoNothing (Returning (#id `as` #user_id))
+      `as` #u )
+    ( insertInto_ #emails
+      ( Select (defaultAs #id :* #user_id `as` #user_id :* "blah" `as` #email) (from (view #u)) ) )
+:}
+
 >>> printSQL insertUser
 INSERT INTO "users" ("id", "name") VALUES (DEFAULT, ($1 :: text)) ON CONFLICT DO NOTHING RETURNING "id" AS "fromOnly"
 >>> printSQL insertEmail
