@@ -32,8 +32,8 @@ module Squeal.PostgreSQL.Manipulation
   , queryStatement
   , QueryClause (..)
   , pattern Values_
-  , ColumnValue (..)
   , DefaultAliasable (..)
+  , ColumnExpression (..)
   , ReturningClause (..)
   , ConflictClause (..)
   , ConflictTarget (..)
@@ -162,9 +162,7 @@ let
     '[ "tab" ::: 'Table ('[] :=>
       '[ "col1" ::: 'NoDef :=> 'NotNull 'PGint4
        , "col2" ::: 'NoDef :=> 'NotNull 'PGint4 ])] '[] '[]
-  manipulation =
-    update_ #tab (Set 2 `as` #col1 :* Same `as` #col2)
-      (#col1 ./= #col2)
+  manipulation = update_ #tab (2 `as` #col1) (#col1 ./= #col2)
 in printSQL manipulation
 :}
 UPDATE "tab" SET "col1" = 2 WHERE ("col1" <> "col2")
@@ -423,23 +421,6 @@ class AllUnique (xs :: [(Symbol, a)]) where
 instance AllUnique '[] where
 instance (IsNotElem x (Elem x xs), AllUnique xs) => AllUnique (x ': xs) where
 
--- | `ColumnValue`s are values to insert or update in a row.
--- `Same` updates with the same value.
--- `Default` inserts or updates with the @DEFAULT@ value.
--- `Set` sets a value to be an `Expression`, which can refer to
--- existing value in the row for an update.
-data ColumnValue
-  (schema :: SchemaType)
-  (columns :: RowType)
-  (params :: [NullityType])
-  (ty :: ColumnType)
-  where
-    Same :: ColumnValue schema (column ': columns) params ty
-    Default :: ColumnValue schema columns params ('Def :=> ty)
-    Set
-      :: (forall table. Expression schema '[table ::: columns] 'Ungrouped params ty)
-      -> ColumnValue schema columns params (constraint :=> ty)
-
 -- | A `ReturningClause` computes and return value(s) based
 -- on each row actually inserted, updated or deleted. This is primarily
 -- useful for obtaining values that were supplied by defaults, such as a
@@ -484,11 +465,13 @@ update
      , SOP.SListI results
      , Has tab schema ('Table table)
      , row ~ TableToRow table
-     , columns ~ TableToColumns table )
+     , columns ~ TableToColumns table
+     , SOP.All (HasIn columns) subcolumns
+     , AllUnique subcolumns )
   => Alias tab -- ^ table to update
-  -> NP (Aliased (ColumnValue schema row params)) columns
+  -> NP (ColumnExpression schema '[t ::: row] 'Ungrouped params) subcolumns
   -- ^ modified values to replace old values
-  -> (forall t. Condition schema '[t ::: row] 'Ungrouped params)
+  -> (Condition schema '[t ::: row] 'Ungrouped params)
   -- ^ condition under which to perform update on a row
   -> ReturningClause schema params row results -- ^ results to return
   -> Manipulation schema params results
@@ -496,30 +479,22 @@ update tab columns wh returning = UnsafeManipulation $
   "UPDATE"
   <+> renderAlias tab
   <+> "SET"
-  <+> renderCommaSeparatedMaybe renderUpdate columns
+  <+> renderCommaSeparated renderColumnExpression columns
   <+> "WHERE" <+> renderExpression wh
   <> renderReturningClause returning
-  where
-    renderUpdate
-      :: Aliased (ColumnValue schema columns params) column
-      -> Maybe ByteString
-    renderUpdate = \case
-      Same `As` _ -> Nothing
-      Default `As` column -> Just $
-        renderAlias column <+> "=" <+> "DEFAULT"
-      Set expression `As` column -> Just $
-        renderAlias column <+> "=" <+> renderExpression expression
 
 -- | Update a row returning `Nil`.
 update_
   :: ( SOP.SListI columns
      , Has tab schema ('Table table)
      , row ~ TableToRow table
-     , columns ~ TableToColumns table )
+     , columns ~ TableToColumns table
+     , SOP.All (HasIn columns) subcolumns
+     , AllUnique subcolumns )
   => Alias tab -- ^ table to update
-  -> NP (Aliased (ColumnValue schema row params)) columns
+  -> NP (ColumnExpression schema '[t ::: row] 'Ungrouped params) subcolumns
   -- ^ modified values to replace old values
-  -> (forall t. Condition schema '[t ::: row] 'Ungrouped params)
+  -> (Condition schema '[t ::: row] 'Ungrouped params)
   -- ^ condition under which to perform update on a row
   -> Manipulation schema params '[]
 update_ tab columns wh = update tab columns wh (Returning Nil)
