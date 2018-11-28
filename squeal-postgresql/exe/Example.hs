@@ -64,12 +64,12 @@ insertUser :: Manipulation Schema '[ 'NotNull 'PGtext, 'NotNull ('PGvararray ('N
   '[ "fromOnly" ::: 'NotNull 'PGint4 ]
 insertUser = insertInto #users
   (Values_ (defaultAs #id :* param @1 `as` #name :* param @2 `as` #vec))
-  OnConflictDoNothing (Returning (#id `as` #fromOnly))
+  (OnConflict (OnConstraint #pk_users) DoNothing) (Returning (#id `as` #fromOnly))
 
 insertEmail :: Manipulation Schema '[ 'NotNull 'PGint4, 'Null 'PGtext] '[]
 insertEmail = insertInto #emails
   (Values_ (defaultAs #id :* param @1 `as` #user_id :* param @2 `as` #email))
-  OnConflictDoNothing (Returning Nil)
+  (OnConflict (OnConstraint #pk_emails) DoNothing) (Returning Nil)
 
 getUsers :: Query Schema '[]
   '[ "userName" ::: 'NotNull 'PGtext

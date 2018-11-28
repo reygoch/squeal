@@ -28,19 +28,19 @@ Squeal data manipulation language.
 
 module Squeal.PostgreSQL.Manipulation
   ( -- * Manipulation
-    Manipulation (UnsafeManipulation, renderManipulation)
+    Manipulation (..)
   , queryStatement
+  , QueryClause (..)
+  , pattern Values_
   , ColumnValue (..)
-  , ReturningClause (ReturningStar, Returning)
-  , ConflictClause (OnConflictDoRaise, OnConflictDoNothing, OnConflictDoUpdate)
+  , DefaultAliasable (..)
+  , ReturningClause (..)
+  , ConflictClause (..)
+  , ConflictTarget (..)
+  , ConflictAction (..)
     -- * Insert
   , insertInto
   , insertInto_
-  , Insertion (..)
-  , renderInsertion
-  , pattern Values_
-  , Optional (..)
-  , DefaultAliasable (..)
   , renderReturningClause
   , renderConflictClause
     -- * Update
@@ -119,7 +119,7 @@ upsert:
 >>> :{
 let
   manipulation :: Manipulation
-    '[ "tab" ::: 'Table ('[] :=>
+    '[ "tab" ::: 'Table ('["check" ::: 'Check '[col1]] :=>
       '[ "col1" ::: 'NoDef :=> 'NotNull 'PGint4
        , "col2" ::: 'NoDef :=> 'NotNull 'PGint4 ])]
     '[] '[ "sum" ::: 'NotNull 'PGint4]
@@ -127,13 +127,11 @@ let
     insertInto #tab (Values
       (2 `as` #col1 :* 4 `as` #col2)
       [6 `as` #col1 :* 8 `as` #col2])
-      (OnConflictDoUpdate
-        (Set 2 `as` #col1 :* Same `as` #col2)
-        [#col1 .== #col2])
+      (OnConflict (OnConstraint #check) (DoUpdate (2 `as` #col1) [#col1 .== #col2]))
       (Returning $ (#col1 + #col2) `as` #sum)
 in printSQL manipulation
 :}
-INSERT INTO "tab" ("col1", "col2") VALUES (2, 4), (6, 8) ON CONFLICT DO UPDATE SET "col1" = 2 WHERE ("col1" = "col2") RETURNING ("col1" + "col2") AS "sum"
+INSERT INTO "tab" ("col1", "col2") VALUES (2, 4), (6, 8) ON CONFLICT ON CONSTRAINT "check" DO UPDATE SET "col1" = 2 WHERE ("col1" = "col2") RETURNING ("col1" + "col2") AS "sum"
 
 query insert:
 
@@ -151,10 +149,10 @@ let
      ] '[] '[]
   manipulation =
     insertInto_ #tab
-      (SelectStar (from (table (#other_tab `as` #t))))
+      (Subquery (selectStar (from (table #other_tab))))
 in printSQL manipulation
 :}
-INSERT INTO "tab" SELECT * FROM "other_tab" AS "t"
+INSERT INTO "tab" SELECT * FROM "other_tab" AS "other_tab"
 
 update:
 
@@ -198,7 +196,7 @@ let
      ] '[ 'NotNull 'PGdate] '[]
   manipulation = with
     (deleteFrom #products (#date .< param @1) ReturningStar `as` #deleted_rows)
-    (insertInto_ #products_deleted (SelectStar (from (view (#deleted_rows `as` #t)))))
+    (insertInto_ #products_deleted (Subquery (selectStar (from (view (#deleted_rows `as` #t))))))
 in printSQL manipulation
 :}
 WITH "deleted_rows" AS (DELETE FROM "products" WHERE ("date" < ($1 :: date)) RETURNING *) INSERT INTO "products_deleted" SELECT * FROM "deleted_rows" AS "t"
@@ -242,13 +240,13 @@ insertInto
      , SOP.SListI columns
      , SOP.SListI result )
   => Alias tab
-  -> Insertion schema params columns
-  -> ConflictClause schema table params
+  -> QueryClause schema params columns
+  -> ConflictClause schema params table
   -> ReturningClause schema params row result
   -> Manipulation schema params result
-insertInto tab insertion conflict ret = UnsafeManipulation $
+insertInto tab qry conflict ret = UnsafeManipulation $
   "INSERT" <+> "INTO" <+> renderAlias tab
-  <+> renderInsertion insertion
+  <+> renderQueryClause qry
   <> renderConflictClause conflict
   <> renderReturningClause ret
 
@@ -258,18 +256,20 @@ insertInto_
      , row ~ TableToRow table
      , SOP.SListI columns )
   => Alias tab
-  -> Insertion schema params columns
+  -> QueryClause schema params columns
   -> Manipulation schema params '[]
-insertInto_ tab insertion =
-  insertInto tab insertion OnConflictDoRaise (Returning Nil)
+insertInto_ tab qry =
+  insertInto tab qry OnConflictDoRaise (Returning Nil)
 
 data QueryClause schema params columns where
-  Values'
-    :: NP (ColumnExpression schema '[] 'Ungrouped params) columns
+  Values
+    :: SOP.SListI columns
+    => NP (ColumnExpression schema '[] 'Ungrouped params) columns
     -> [NP (ColumnExpression schema '[] 'Ungrouped params) columns]
     -> QueryClause schema params columns
-  Select'
-    :: NP (ColumnExpression schema from grp params) columns
+  Select
+    :: SOP.SListI columns
+    => NP (ColumnExpression schema from grp params) columns
     -> TableExpression schema params from grp
     -> QueryClause schema params columns
   Subquery
@@ -277,26 +277,111 @@ data QueryClause schema params columns where
     => Query schema params row
     -> QueryClause schema params columns
 
+pattern Values_
+  :: SOP.SListI columns
+  => NP (ColumnExpression schema '[] 'Ungrouped params) columns
+  -> QueryClause schema params columns
+pattern Values_ vals = Values vals []
+
+renderQueryClause
+  :: QueryClause schema params columns
+  -> ByteString
+renderQueryClause = \case
+  Values row0 rows ->
+    parenthesized (renderCommaSeparated renderAliasPart row0)
+    <+> "VALUES"
+    <+> commaSeparated
+          ( parenthesized
+          . renderCommaSeparated renderValuePart <$> row0 : rows )
+  Select row0 tab ->
+    parenthesized (renderCommaSeparated renderAliasPart row0)
+    <+> "SELECT"
+    <+> renderCommaSeparated renderValuePart row0
+    <+> renderTableExpression tab
+  Subquery qry -> renderQuery qry
+  where
+    renderAliasPart, renderValuePart
+      :: ColumnExpression schema from grp params column -> ByteString
+    renderAliasPart = \case
+      DefaultAs name -> renderAlias name
+      Specific (_ `As` name) -> renderAlias name
+    renderValuePart = \case
+      DefaultAs _ -> "DEFAULT"
+      Specific (value `As` _) -> renderExpression value
+
 data ColumnExpression schema from grp params column where
-  DefaultAs'
-    :: Alias col
+  DefaultAs
+    :: KnownSymbol col
+    => Alias col
     -> ColumnExpression schema from grp params (col ::: 'Def :=> ty)
-  Specific'
+  Specific
     :: Aliased (Expression schema from grp params) (col ::: ty)
     -> ColumnExpression schema from grp params (col ::: defness :=> ty)
+instance (KnownSymbol alias, column ~ (alias ::: defness :=> ty))
+  => Aliasable alias
+       (Expression schema from grp params ty)
+       (ColumnExpression schema from grp params column)
+      where
+        expression `as` alias = Specific (expression `As` alias)
+instance (KnownSymbol alias, columns ~ '[alias ::: defness :=> ty])
+  => Aliasable alias
+       (Expression schema from grp params ty)
+       (NP (ColumnExpression schema from grp params) columns)
+      where
+        expression `as` alias = expression `as` alias :* Nil
 
-data ConflictClause' schema params table where
-  OnConflictRaise :: ConflictClause' schema params table
+class KnownSymbol alias
+  => DefaultAliasable alias aliased | aliased -> alias where
+    defaultAs :: Alias alias -> aliased
+instance (KnownSymbol col, column ~ (col ::: 'Def :=> ty))
+  => DefaultAliasable col (ColumnExpression schema from grp params column) where
+    defaultAs = DefaultAs
+instance (KnownSymbol col, columns ~ '[col ::: 'Def :=> ty])
+  => DefaultAliasable col (NP (ColumnExpression schema from grp params) columns) where
+    defaultAs col = defaultAs col :* Nil
+
+renderColumnExpression
+  :: ColumnExpression schema from grp params column
+  -> ByteString
+renderColumnExpression = \case
+  DefaultAs col ->
+    renderAlias col <+> "=" <+> "DEFAULT"
+  Specific (expression `As` col) ->
+    renderAlias col <+> "=" <+> renderExpression expression
+
+-- | A `ConflictClause` specifies an action to perform upon a constraint
+-- violation. `OnConflictDoRaise` will raise an error.
+-- `OnConflictDoNothing` simply avoids inserting a row.
+-- `OnConflictDoUpdate` updates the existing row that conflicts with the row
+-- proposed for insertion.
+data ConflictClause schema params table where
+  OnConflictDoRaise :: ConflictClause schema params table
   OnConflict
     :: ConflictTarget constraints
     -> ConflictAction schema params columns
-    -> ConflictClause' schema params (constraints :=> columns)
+    -> ConflictClause schema params (constraints :=> columns)
+
+-- | Render a `ConflictClause`.
+renderConflictClause
+  :: SOP.SListI (TableToColumns table)
+  => ConflictClause schema params table
+  -> ByteString
+renderConflictClause = \case
+  OnConflictDoRaise -> ""
+  OnConflict target action -> " ON CONFLICT"
+    <+> renderConflictTarget target <+> renderConflictAction action
 
 data ConflictTarget constraints where
   OnConstraint
     :: Has con constraints constraint
     => Alias con
     -> ConflictTarget constraints
+
+renderConflictTarget
+  :: ConflictTarget constraints
+  -> ByteString
+renderConflictTarget (OnConstraint con) =
+  "ON" <+> "CONSTRAINT" <+> renderAlias con
 
 data ConflictAction schema params columns where
   DoNothing :: ConflictAction schema params columns
@@ -309,6 +394,18 @@ data ConflictAction schema params columns where
     => NP (ColumnExpression schema '[t ::: row] 'Ungrouped params) subcolumns
     -> [Condition schema '[t ::: row] 'Ungrouped params]
     -> ConflictAction schema params columns
+
+renderConflictAction
+  :: ConflictAction schema params columns
+  -> ByteString
+renderConflictAction = \case
+  DoNothing -> "DO NOTHING"
+  DoUpdate updates whs'
+    -> "DO UPDATE SET"
+      <+> renderCommaSeparated renderColumnExpression updates
+      <> case whs' of
+        [] -> ""
+        wh:whs -> " WHERE" <+> renderExpression (foldr (.&&) wh whs)
 
 class HasIn fields (x :: (Symbol, a)) where
 instance (Has alias fields field) => HasIn fields '(alias, field) where
@@ -325,89 +422,6 @@ instance (TypeError (      'Text "Cannot assign to "
 class AllUnique (xs :: [(Symbol, a)]) where
 instance AllUnique '[] where
 instance (IsNotElem x (Elem x xs), AllUnique xs) => AllUnique (x ': xs) where
-
-data Insertion schema params columns where
-  Values
-    :: SOP.SListI columns
-    => NP (Optional (Expression schema '[] 'Ungrouped params)) columns
-    -> [NP (Optional (Expression schema '[] 'Ungrouped params)) columns]
-    -> Insertion schema params columns
-  Select
-    :: SOP.SListI columns
-    => NP (Optional (Expression schema from grp params)) columns
-    -> TableExpression schema params from grp
-    -> Insertion schema params columns
-  SelectStar
-    :: (HasUnique table from row, Undefault columns ~ row)
-    => TableExpression schema params from 'Ungrouped
-    -> Insertion schema params columns
-
-type family Undefault columns where
-  Undefault '[] = '[]
-  Undefault ((col ::: defness :=> ty) ': columns) = (col ::: ty) ': Undefault columns
-
-renderInsertion
-  :: Insertion schema params columns
-  -> ByteString
-renderInsertion = \case
-  Values row0 rows ->
-    parenthesized (renderCommaSeparated renderAliasPart row0)
-    <+> "VALUES"
-    <+> commaSeparated
-          ( parenthesized
-          . renderCommaSeparated renderValuePart <$> row0 : rows )
-  Select row0 tab ->
-    parenthesized (renderCommaSeparated renderAliasPart row0)
-    <+> "SELECT"
-    <+> renderCommaSeparated renderValuePart row0
-    <+> renderTableExpression tab
-  SelectStar tab -> "SELECT" <+> "*" <+> renderTableExpression tab
-  where
-    renderAliasPart, renderValuePart
-      :: Optional (Expression schema from grp params) column -> ByteString
-    renderAliasPart = \case
-      DefaultAs name -> renderAlias name
-      Specific (_ `As` name) -> renderAlias name
-    renderValuePart = \case
-      DefaultAs _ -> "DEFAULT"
-      Specific (value `As` _) -> renderExpression value
-
-pattern Values_
-  :: SOP.SListI columns
-  => NP (Optional (Expression schema '[] 'Ungrouped params)) columns
-  -> Insertion schema params columns
-pattern Values_ vals = Values vals []
-
-data Optional expression column where
-  DefaultAs
-    :: KnownSymbol col
-    => Alias col
-    -> Optional expression (col ::: 'Def :=> ty)
-  Specific
-    :: KnownSymbol col
-    => Aliased expression (col ::: ty)
-    -> Optional expression (col ::: defness :=> ty)
-instance (KnownSymbol alias, column ~ (alias ::: defness :=> ty))
-  => Aliasable alias
-    (expression ty)
-    (Optional expression column)
-      where
-        expression `as` alias = Specific (expression `As` alias)
-instance (KnownSymbol alias, columns ~ '[alias ::: defness :=> ty])
-  => Aliasable alias
-    (expression ty)
-    (NP (Optional expression) columns)
-      where
-        expression `as` alias = Specific (expression `As` alias) :* Nil
-class KnownSymbol alias => DefaultAliasable alias aliased
-  | aliased -> alias
-  where defaultAs :: Alias alias -> aliased
-instance (KnownSymbol col, column ~ (col ::: 'Def :=> ty))
-  => DefaultAliasable col (Optional expression column) where
-    defaultAs = DefaultAs
-instance (KnownSymbol col, columns ~ '[col ::: 'Def :=> ty])
-  => DefaultAliasable col (NP (Optional expression) columns) where
-    defaultAs col = DefaultAs col :* Nil
 
 -- | `ColumnValue`s are values to insert or update in a row.
 -- `Same` updates with the same value.
@@ -458,48 +472,6 @@ renderReturningClause = \case
   Returning Nil -> ""
   Returning results -> " RETURNING"
     <+> renderCommaSeparated (renderAliasedAs renderExpression) results
-
--- | A `ConflictClause` specifies an action to perform upon a constraint
--- violation. `OnConflictDoRaise` will raise an error.
--- `OnConflictDoNothing` simply avoids inserting a row.
--- `OnConflictDoUpdate` updates the existing row that conflicts with the row
--- proposed for insertion.
-data ConflictClause
-  (schema :: SchemaType)
-  (table :: TableType)
-  (params :: [NullityType]) where
-    OnConflictDoRaise :: ConflictClause schema table params
-    OnConflictDoNothing :: ConflictClause schema table params
-    OnConflictDoUpdate
-      :: (row ~ TableToRow table, columns ~ TableToColumns table)
-      => NP (Aliased (ColumnValue schema row params)) columns
-      -> [Condition schema '[t ::: row] 'Ungrouped params]
-      -> ConflictClause schema table params
-
--- | Render a `ConflictClause`.
-renderConflictClause
-  :: SOP.SListI (TableToColumns table)
-  => ConflictClause schema table params
-  -> ByteString
-renderConflictClause = \case
-  OnConflictDoRaise -> ""
-  OnConflictDoNothing -> " ON CONFLICT DO NOTHING"
-  OnConflictDoUpdate updates whs'
-    -> " ON CONFLICT DO UPDATE SET"
-      <+> renderCommaSeparatedMaybe renderUpdate updates
-      <> case whs' of
-        [] -> ""
-        wh:whs -> " WHERE" <+> renderExpression (foldr (.&&) wh whs)
-      where
-        renderUpdate
-          :: Aliased (ColumnValue schema columns params) column
-          -> Maybe ByteString
-        renderUpdate = \case
-          Same `As` _ -> Nothing
-          Default `As` column -> Just $
-            renderAlias column <+> "=" <+> "DEFAULT"
-          Set expression `As` column -> Just $
-            renderAlias column <+> "=" <+> renderExpression expression
 
 {-----------------------------------------
 UPDATE statements

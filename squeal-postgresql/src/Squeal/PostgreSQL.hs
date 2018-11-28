@@ -120,7 +120,7 @@ let
   insertUser :: Manipulation Schema '[ 'NotNull 'PGtext ] '[ "fromOnly" ::: 'NotNull 'PGint4 ]
   insertUser = insertInto #users
     (Values_ (defaultAs #id :* param @1 `as` #name))
-    OnConflictDoNothing (Returning (#id `as` #fromOnly))
+    (OnConflict (OnConstraint #pk_users) DoNothing) (Returning (#id `as` #fromOnly))
 :}
 
 >>> :{
@@ -128,7 +128,7 @@ let
   insertEmail :: Manipulation Schema '[ 'NotNull 'PGint4, 'Null 'PGtext] '[]
   insertEmail = insertInto #emails
     (Values_ (defaultAs #id :* param @1 `as` #user_id :* param @2 `as` #email))
-    OnConflictDoNothing (Returning Nil)
+    (OnConflict (OnConstraint #pk_emails) DoNothing) (Returning Nil)
 :}
 
 >>> :{
@@ -137,16 +137,16 @@ let
   insertUser' = with
     ( insertInto #users
         ( Values_ (defaultAs #id :* param @1 `as` #name) )
-        OnConflictDoNothing (Returning (#id `as` #user_id))
+        (OnConflict (OnConstraint #pk_users) DoNothing) (Returning (#id `as` #user_id))
       `as` #u )
     ( insertInto_ #emails
       ( Select (defaultAs #id :* #user_id `as` #user_id :* "blah" `as` #email) (from (view #u)) ) )
 :}
 
 >>> printSQL insertUser
-INSERT INTO "users" ("id", "name") VALUES (DEFAULT, ($1 :: text)) ON CONFLICT DO NOTHING RETURNING "id" AS "fromOnly"
+INSERT INTO "users" ("id", "name") VALUES (DEFAULT, ($1 :: text)) ON CONFLICT ON CONSTRAINT "pk_users" DO NOTHING RETURNING "id" AS "fromOnly"
 >>> printSQL insertEmail
-INSERT INTO "emails" ("id", "user_id", "email") VALUES (DEFAULT, ($1 :: int4), ($2 :: text)) ON CONFLICT DO NOTHING
+INSERT INTO "emails" ("id", "user_id", "email") VALUES (DEFAULT, ($1 :: int4), ($2 :: text)) ON CONFLICT ON CONSTRAINT "pk_emails" DO NOTHING
 
 Next we write a `Query` to retrieve users from the database. We're not
 interested in the ids here, just the usernames and email addresses. We
