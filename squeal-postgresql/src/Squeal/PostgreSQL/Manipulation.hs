@@ -263,6 +263,69 @@ insertInto_
 insertInto_ tab insertion =
   insertInto tab insertion OnConflictDoRaise (Returning Nil)
 
+data QueryClause schema params columns where
+  Values'
+    :: NP (ColumnExpression schema '[] 'Ungrouped params) columns
+    -> [NP (ColumnExpression schema '[] 'Ungrouped params) columns]
+    -> QueryClause schema params columns
+  Select'
+    :: NP (ColumnExpression schema from grp params) columns
+    -> TableExpression schema params from grp
+    -> QueryClause schema params columns
+  Subquery
+    :: ColumnsToRow columns ~ row
+    => Query schema params row
+    -> QueryClause schema params columns
+
+data ColumnExpression schema from grp params column where
+  DefaultAs'
+    :: Alias col
+    -> ColumnExpression schema from grp params (col ::: 'Def :=> ty)
+  Specific'
+    :: Aliased (Expression schema from grp params) (col ::: ty)
+    -> ColumnExpression schema from grp params (col ::: defness :=> ty)
+
+data ConflictClause' schema params table where
+  OnConflictRaise :: ConflictClause' schema params table
+  OnConflict
+    :: ConflictTarget constraints
+    -> ConflictAction schema params columns
+    -> ConflictClause' schema params (constraints :=> columns)
+
+data ConflictTarget constraints where
+  OnConstraint
+    :: Has con constraints constraint
+    => Alias con
+    -> ConflictTarget constraints
+
+data ConflictAction schema params columns where
+  DoNothing :: ConflictAction schema params columns
+  DoUpdate
+    :: ( row ~ ColumnsToRow columns
+       , SOP.SListI columns
+       , columns ~ (col0 ': cols)
+       , SOP.All (HasIn columns) subcolumns
+       , AllUnique subcolumns )
+    => NP (ColumnExpression schema '[t ::: row] 'Ungrouped params) subcolumns
+    -> [Condition schema '[t ::: row] 'Ungrouped params]
+    -> ConflictAction schema params columns
+
+class HasIn fields (x :: (Symbol, a)) where
+instance (Has alias fields field) => HasIn fields '(alias, field) where
+
+-- | Utility class for `AllUnique` to provide nicer error messages.
+class IsNotElem x isElem where
+instance IsNotElem x 'False where
+instance (TypeError (      'Text "Cannot assign to "
+                      ':<>: 'ShowType alias
+                      ':<>: 'Text " more than once"))
+   => IsNotElem '(alias, a) 'True where
+
+-- | No elem of @xs@ appears more than once, in the context of assignment.
+class AllUnique (xs :: [(Symbol, a)]) where
+instance AllUnique '[] where
+instance (IsNotElem x (Elem x xs), AllUnique xs) => AllUnique (x ': xs) where
+
 data Insertion schema params columns where
   Values
     :: SOP.SListI columns

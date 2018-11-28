@@ -118,6 +118,7 @@ module Squeal.PostgreSQL.Schema
     -- * Table Conversions
   , TableToColumns
   , TableToRow
+  , ColumnsToRow
   ) where
 
 import Control.Category
