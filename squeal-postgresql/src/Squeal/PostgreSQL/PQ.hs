@@ -245,8 +245,8 @@ class IndexedMonadTransPQ pq where
   -- | Safely embed a computation in a larger schema.
   pqEmbed
     :: Monad m
-    => pq db0 db1 m x
-    -> pq (schema ': db0) (schema : db1) m x
+    => pq ('DBType ctes0 schemas0) ('DBType ctes1 schemas1) m x
+    -> pq ('DBType ctes0 (schema ': schemas0)) ('DBType ctes1 (schema : schemas1)) m x
 
   -- | Run a `Definition` with `LibPQ.exec`, we expect that libpq obeys the law
   --

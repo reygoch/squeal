@@ -98,6 +98,8 @@ Row 0
   , TypeApplications
   , FlexibleContexts
   , TypeOperators
+  , ScopedTypeVariables
+  , PartialTypeSignatures
 #-}
 
 module Squeal.PostgreSQL.Migration
@@ -137,10 +139,10 @@ data Migration io db0 db1 = Migration
 -- execute the `Migration` and insert its row in the `MigrationsTable`.
 migrateUp
   :: MonadBaseControl IO io
-  => AlignedList (Migration io) db0 db1 -- ^ migrations to run
+  => AlignedList (Migration io) ('DBType '[] schemas0) ('DBType '[] schemas1) -- ^ migrations to run
   -> PQ
-    ("migrations" ::: MigrationsSchema ': db0)
-    ("migrations" ::: MigrationsSchema ': db1)
+    ('DBType '[] ("migrations" ::: MigrationsSchema ': schemas0))
+    ('DBType '[] ("migrations" ::: MigrationsSchema ': schemas1))
     io ()
 migrateUp migration =
   define createMigrations
@@ -150,10 +152,10 @@ migrateUp migration =
 
     upMigrations
       :: MonadBaseControl IO io
-      => AlignedList (Migration io) db0 db1
+      => AlignedList (Migration io) ('DBType '[] schemas0) ('DBType '[] schemas1)
       -> PQ
-        ("migrations" ::: MigrationsSchema ': db0)
-        ("migrations" ::: MigrationsSchema ': db1)
+        ('DBType '[] ("migrations" ::: MigrationsSchema ': schemas0))
+        ('DBType '[] ("migrations" ::: MigrationsSchema ': schemas1))
         io ()
     upMigrations = \case
       Done -> return ()
@@ -161,9 +163,9 @@ migrateUp migration =
 
     upMigration
       :: MonadBase IO io
-      => Migration io db0 db1 -> PQ
-        ("migrations" ::: MigrationsSchema ': db0)
-        ("migrations" ::: MigrationsSchema ': db1)
+      => Migration io ('DBType '[] schemas0) ('DBType '[] schemas1) -> PQ
+        ('DBType '[] ("migrations" ::: MigrationsSchema ': schemas0))
+        ('DBType '[] ("migrations" ::: MigrationsSchema ': schemas1))
         io ()
     upMigration step =
       queryExecuted step
@@ -178,9 +180,9 @@ migrateUp migration =
 
     queryExecuted
       :: MonadBase IO io
-      => Migration io db0 db1 -> PQ
-        ("migrations" ::: MigrationsSchema ': db0)
-        ("migrations" ::: MigrationsSchema ': db0)
+      => Migration io ('DBType '[] schemas0) ('DBType '[] schemas1) -> PQ
+        ('DBType '[] ("migrations" ::: MigrationsSchema ': schemas0))
+        ('DBType '[] ("migrations" ::: MigrationsSchema ': schemas0))
         io Row
     queryExecuted step = do
       result <- runQueryParams selectMigration (Only (name step))
@@ -193,11 +195,11 @@ migrateUp migration =
 -- rewind the `Migration` and delete its row in the `MigrationsTable`.
 migrateDown
   :: MonadBaseControl IO io
-  => AlignedList (Migration io) db0 db1 -- ^ migrations to rewind
+  => AlignedList (Migration io) ('DBType '[] schemas0) ('DBType '[] schemas1) -- ^ migrations to rewind
   -> PQ
-    ("migrations" ::: MigrationsSchema ': db1)
-    ("migrations" ::: MigrationsSchema ': db0)
-    io ()
+     ('DBType '[] ("migrations" ::: MigrationsSchema ': schemas1))
+     ('DBType '[] ("migrations" ::: MigrationsSchema ': schemas0))
+     io ()
 migrateDown migrations =
   define createMigrations
   & pqBind okResult
@@ -206,20 +208,20 @@ migrateDown migrations =
 
     downMigrations
       :: MonadBaseControl IO io
-      => AlignedList (Migration io) db0 db1 -> PQ
-        ("migrations" ::: MigrationsSchema ': db1)
-        ("migrations" ::: MigrationsSchema ': db0)
-        io ()
+      => AlignedList (Migration io) ('DBType '[] schemas0) ('DBType '[] schemas1) -> PQ
+         ('DBType '[] ("migrations" ::: MigrationsSchema ': schemas1))
+         ('DBType '[] ("migrations" ::: MigrationsSchema ': schemas0))
+         io ()
     downMigrations = \case
       Done -> return ()
       step :>> steps -> downMigrations steps & pqThen (downMigration step)
 
     downMigration
       :: MonadBase IO io
-      => Migration io db0 db1 -> PQ
-        ("migrations" ::: MigrationsSchema ': db1)
-        ("migrations" ::: MigrationsSchema ': db0)
-        io ()
+      => Migration io ('DBType '[] schemas0) ('DBType '[] schemas1) -> PQ
+         ('DBType '[] ("migrations" ::: MigrationsSchema ': schemas1))
+         ('DBType '[] ("migrations" ::: MigrationsSchema ': schemas0))
+         io ()
     downMigration step =
       queryExecuted step
       & pqBind (\ executed ->
@@ -233,9 +235,9 @@ migrateDown migrations =
 
     queryExecuted
       :: MonadBase IO io
-      => Migration io db0 db1 -> PQ
-        ("migrations" ::: MigrationsSchema ': db1)
-        ("migrations" ::: MigrationsSchema ': db1)
+      => Migration io ('DBType '[] schemas0) ('DBType '[] schemas1) -> PQ
+         ('DBType '[] ("migrations" ::: MigrationsSchema ': schemas1))
+         ('DBType '[] ("migrations" ::: MigrationsSchema ': schemas1))
         io Row
     queryExecuted step = do
       result <- runQueryParams selectMigration (Only (name step))
@@ -262,7 +264,7 @@ type MigrationsSchema = '["schema_migrations" ::: 'Table MigrationsTable]
 
 -- | Creates a `MigrationsTable` if it does not already exist.
 createMigrations
-  :: Has "migrations" db MigrationsSchema
+  :: (db ~ 'DBType ctes schemas, Has "migrations" schemas MigrationsSchema)
   => Definition db db
 createMigrations =
   createSchemaIfNotExists #migrations >>>
@@ -274,7 +276,7 @@ createMigrations =
 
 -- | Inserts a `Migration` into the `MigrationsTable`
 insertMigration
-  :: Has "migrations" db MigrationsSchema
+  :: (db ~ 'DBType ctes schemas, Has "migrations" schemas MigrationsSchema)
   => Manipulation db '[ 'NotNull 'PGtext] '[]
 insertMigration = insertRow_ (#migrations ! #schema_migrations)
   ( Set (param @1) `as` #name :*
@@ -282,14 +284,14 @@ insertMigration = insertRow_ (#migrations ! #schema_migrations)
 
 -- | Deletes a `Migration` from the `MigrationsTable`
 deleteMigration
-  :: Has "migrations" db MigrationsSchema
+  :: (db ~ 'DBType ctes schemas, Has "migrations" schemas MigrationsSchema)
   => Manipulation db '[ 'NotNull 'PGtext ] '[]
 deleteMigration = deleteFrom_ (#migrations ! #schema_migrations) (#name .== param @1)
 
 -- | Selects a `Migration` from the `MigrationsTable`, returning
 -- the time at which it was executed.
 selectMigration
-  :: Has "migrations" db MigrationsSchema
+  :: (db ~ 'DBType ctes schemas, Has "migrations" schemas MigrationsSchema)
   => Query db '[ 'NotNull 'PGtext ]
     '[ "executed_at" ::: 'NotNull 'PGtimestamptz ]
 selectMigration = select

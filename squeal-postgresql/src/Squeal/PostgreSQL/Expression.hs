@@ -486,13 +486,13 @@ row exprs = UnsafeExpression $ "ROW" <> parenthesized
 -- >>> printSQL $ i & field #complex #imaginary
 -- (ROW(0, 1)::"complex")."imaginary"
 field
-  :: ( Has sch db schema
+  :: ( Has sch schemas schema
      , Has tydef schema ('Typedef ('PGcomposite row))
      , Has field row ty)
   => QualifiedAlias sch tydef -- ^ row type
   -> Alias field -- ^ field name
-  -> Expression db from grouping params ('NotNull ('PGcomposite row))
-  -> Expression db from grouping params ty
+  -> Expression ('DBType commons schemas) from grouping params ('NotNull ('PGcomposite row))
+  -> Expression ('DBType commons schemas) from grouping params ty
 field td fld expr = UnsafeExpression $
   parenthesized (renderExpression expr <> "::" <> renderQualifiedAlias td)
     <> "." <> renderAlias fld
@@ -1616,25 +1616,25 @@ newtype TypeExpression (db :: DBType) (ty :: NullityType)
 
 -- | The enum or composite type in a `Typedef` can be expressed by its alias.
 typedef
-  :: (Has sch db schema, Has td schema ('Typedef ty))
+  :: (Has sch schemas schema, Has td schema ('Typedef ty))
   => QualifiedAlias sch td
-  -> TypeExpression db (nullity ty)
+  -> TypeExpression ('DBType ctes schemas) (nullity ty)
 typedef = UnsafeTypeExpression . renderQualifiedAlias
 
 -- | The composite type corresponding to a `Table` definition can be expressed
 -- by its alias.
 typetable
-  :: (Has sch db schema, Has tab schema ('Table table))
+  :: (Has sch schemas schema, Has tab schema ('Table table))
   => QualifiedAlias sch tab
-  -> TypeExpression db (nullity ('PGcomposite (TableToRow table)))
+  -> TypeExpression ('DBType ctes schemas) (nullity ('PGcomposite (TableToRow table)))
 typetable = UnsafeTypeExpression . renderQualifiedAlias
 
 -- | The composite type corresponding to a `View` definition can be expressed
 -- by its alias.
 typeview
-  :: (Has sch db schema, Has vw schema ('View view))
+  :: (Has sch schemas schema, Has vw schema ('View view))
   => QualifiedAlias sch vw
-  -> TypeExpression db (nullity ('PGcomposite view))
+  -> TypeExpression ('DBType ctes schemas) (nullity ('PGcomposite view))
 typeview = UnsafeTypeExpression . renderQualifiedAlias
 
 -- | logical Boolean (true/false)

@@ -54,7 +54,7 @@ module Squeal.PostgreSQL.Schema
   , TableType
   , SchemumType (..)
   , SchemaType
-  , DBType
+  , DBType (..)
     -- * Constraints
   , (:=>)
   , ColumnConstraint (..)
@@ -683,7 +683,7 @@ type family Schema :: SchemaType where
 -}
 type SchemaType = [(Symbol,SchemumType)]
 
-type DBType = [(Symbol,SchemaType)]
+data DBType = DBType [(Symbol,RowType)] [(Symbol,SchemaType)]
 
 -- | `IsPGlabel` looks very much like the `IsLabel` class. Whereas
 -- the overloaded label, `fromLabel` is used for column references,

@@ -41,9 +41,10 @@ type Schema =
         ])
    ]
 
-type DB = '["public" ::: Schema]
+type DB0 = 'DBType '[] '["public" ::: '[]]
+type DB = ('DBType '[] '["public" ::: Schema])
 
-setup :: Definition '["public" ::: '[]] DB
+setup :: Definition DB0 DB
 setup = 
   createTable #users
     ( serial `as` #id :*
@@ -59,7 +60,7 @@ setup =
       foreignKey #user_id #users #id
         OnDeleteCascade OnUpdateCascade `as` #fk_user_id )
 
-teardown :: Definition DB '["public" ::: '[]]
+teardown :: Definition DB DB0
 teardown = dropTable #emails >>> dropTable #users
 
 insertUser :: Manipulation DB '[ 'NotNull 'PGtext, 'NotNull ('PGvararray ('Null 'PGint2))]

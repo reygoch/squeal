@@ -81,6 +81,7 @@ module Squeal.PostgreSQL.Query
   , table
   , subquery
   , view
+  , cte
   , crossJoin
   , innerJoin
   , leftOuterJoin
@@ -859,7 +860,7 @@ newtype FromClause db params from
 
 -- | A real `table` is a table from the database.
 table
-  :: (Has sch db schema, Has tab schema ('Table table))
+  :: (db ~ 'DBType ctes schemas, Has sch schemas schema, Has tab schema ('Table table))
   => Aliased (QualifiedAlias sch) (alias ::: tab)
   -> FromClause db params '[alias ::: TableToRow table]
 table (tab `As` alias) = UnsafeFromClause $
@@ -873,11 +874,18 @@ subquery = UnsafeFromClause . renderAliasedAs (parenthesized . renderQuery)
 
 -- | `view` derives a table from a `View`.
 view
-  :: (Has sch db schema, Has vw schema ('View view))
+  :: (db ~ 'DBType ctes schemas, Has sch schemas schema, Has vw schema ('View view))
   => Aliased (QualifiedAlias sch) (alias ::: vw)
   -> FromClause db params '[alias ::: view]
 view (vw `As` alias) = UnsafeFromClause $
   renderQualifiedAlias vw <+> "AS" <+> renderAlias alias
+
+cte
+  :: (db ~ 'DBType ctes schemas, Has vw ctes cte)
+  => Aliased Alias (alias ::: vw)
+  -> FromClause db params '[alias ::: cte]
+cte (vw `As` alias) = UnsafeFromClause $
+  renderAlias vw <+> "AS" <+> renderAlias alias
 
 {- | @left & crossJoin right@. For every possible combination of rows from
     @left@ and @right@ (i.e., a Cartesian product), the joined table will contain
@@ -1365,25 +1373,23 @@ data CommonTableExpression statement
   (db0 :: DBType)
   (db1 :: DBType) where
   CommonTableExpression
-    :: ( Has "public" db schema
-       , Alter "public" (alias ::: 'View cte ': schema) db ~ db1 )
-    => Aliased (statement db params) (alias ::: cte)
-    -> CommonTableExpression statement params db db1
--- instance
---   ( KnownSymbol vw
---   , Has "public" db schema
---   , Alter "public" (vw ::: 'View cte ': schema) db ~ db1
---   ) => Aliasable vw
---     (statement db params cte)
---     (CommonTableExpression statement params db db1) where
---       statement `as` vw = CommonTableExpression (statement `as` vw)
--- instance
---   ( KnownSymbol vw
---   , Has "public" db schema
---   , Alter "public" (vw ::: 'View cte ': schema) db ~ db1
---   ) => Aliasable vw (statement db params cte)
---     (AlignedList (CommonTableExpression statement params) db db1) where
---       statement `as` vw = single (statement `as` vw)
+    :: Aliased (statement ('DBType ctes schemas) params) (alias ::: cte)
+    -> CommonTableExpression statement params
+      ('DBType ctes schemas) ('DBType (alias ::: cte ': ctes) schemas)
+instance
+  ( KnownSymbol vw
+  ) => Aliasable vw
+    (statement ('DBType ctes schemas) params cte)
+    (CommonTableExpression statement params
+      ('DBType ctes schemas) ('DBType (vw ::: cte ': ctes) schemas)) where
+        statement `as` vw = CommonTableExpression (statement `as` vw)
+instance
+  ( KnownSymbol vw
+  ) => Aliasable vw
+    (statement ('DBType ctes schemas) params cte)
+    (AlignedList (CommonTableExpression statement params)
+      ('DBType ctes schemas) ('DBType (vw ::: cte ': ctes) schemas)) where
+        statement `as` vw = single (statement `as` vw)
 
 -- | render a `CommonTableExpression`.
 renderCommonTableExpression
@@ -1399,25 +1405,24 @@ renderCommonTableExpressions
   -> CommonTableExpression statement params db0 db1
   -> AlignedList (CommonTableExpression statement params) db1 db2
   -> ByteString
-renderCommonTableExpressions renderStatement cte ctes =
-  renderCommonTableExpression renderStatement cte <> case ctes of
+renderCommonTableExpressions renderStatement ct ctes =
+  renderCommonTableExpression renderStatement ct <> case ctes of
     Done           -> ""
-    cte' :>> ctes' -> "," <+>
-      renderCommonTableExpressions renderStatement cte' ctes'
+    ct' :>> ctes' -> "," <+>
+      renderCommonTableExpressions renderStatement ct' ctes'
 
 -- | `with` provides a way to write auxiliary statements for use in a larger query.
 -- These statements, referred to as `CommonTableExpression`s, can be thought of as
 -- defining temporary tables that exist just for one query.
 class With statement where
   with
-    :: Has "public" db0 schema0
-    => AlignedList (CommonTableExpression statement params) db0 db1
+    :: AlignedList (CommonTableExpression statement params) db0 db1
     -- ^ common table expressions
     -> statement db1 params row
     -- ^ larger query
     -> statement db0 params row
 instance With Query where
-  with Done query = UnsafeQuery $ renderQuery query
-  with (cte :>> ctes) query = UnsafeQuery $
-    "WITH" <+> renderCommonTableExpressions renderQuery cte ctes
+  with Done query = query
+  with (ct :>> ctes) query = UnsafeQuery $
+    "WITH" <+> renderCommonTableExpressions renderQuery ct ctes
       <+> renderQuery query
