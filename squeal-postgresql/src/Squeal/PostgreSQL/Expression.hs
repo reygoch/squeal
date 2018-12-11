@@ -136,7 +136,7 @@ module Squeal.PostgreSQL.Expression
     -- ** Aggregation
   , unsafeAggregate, unsafeAggregateDistinct
   , sum_, sumDistinct
-  , PGAvg (avg, avgDistinct)
+  , PGAvg (..)
   , bitAnd, bitOr, boolAnd, boolOr
   , bitAndDistinct, bitOrDistinct, boolAndDistinct, boolOrDistinct
   , countStar
@@ -1733,7 +1733,7 @@ partitionBy bys = WindowDefinition bys []
 sort expressions
 -----------------------------------------}
 
--- | `SortExpression`s are used by `sortBy` to optionally sort the results
+-- | `SortExpression`s are used by `orderBy` to optionally sort the results
 -- of a `Query`. `Asc` or `Desc` set the sort direction of a `NotNull` result
 -- column to ascending or descending. Ascending order puts smaller values
 -- first, where "smaller" is defined in terms of the `.<` operator. Similarly,

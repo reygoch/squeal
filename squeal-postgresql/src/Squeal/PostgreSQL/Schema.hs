@@ -438,7 +438,7 @@ renderAliased
   -> Aliased expression aliased
   -> ByteString
 renderAliased render (expression `As` alias) =
-  render expression <> " AS " <> renderSQL alias
+  render expression <+> "AS" <+> renderSQL alias
 
 -- | @HasUnique alias fields field@ is a constraint that proves that
 -- @fields@ is a singleton of @alias ::: field@.
@@ -456,7 +456,7 @@ instance {-# OVERLAPPABLE #-} (KnownSymbol alias, Has alias fields field)
   => Has alias (field' ': fields) field
 
 class HasIn fields (x :: (Symbol, a)) where
-instance (Has alias fields field) => HasIn fields '(alias, field) where
+instance Has alias fields field => HasIn fields '(alias, field) where
 
 -- | Utility class for `AllUnique` to provide nicer error messages.
 class IsNotElem x isElem where
