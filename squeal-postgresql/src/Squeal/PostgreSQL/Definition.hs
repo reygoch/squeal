@@ -847,7 +847,7 @@ createView
   -> Definition schemas (Alter sch (Create vw ('View view) schema) schemas)
 createView alias query = UnsafeDefinition $
   "CREATE" <+> "VIEW" <+> renderSQL alias <+> "AS"
-  <+> renderQuery query <> ";"
+  <+> renderSQL query <> ";"
 
 -- | Drop a view.
 --

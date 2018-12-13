@@ -88,6 +88,7 @@ module Squeal.PostgreSQL.Schema
   , Grouping (..)
   , GroupedBy
   , Aggregatable
+  , Over
     -- * Aligned lists
   , AlignedList (..)
   , single
@@ -345,12 +346,17 @@ type family TableToRow (table :: TableType) :: RowType where
 data Grouping
   = Ungrouped -- ^ no aggregation permitted
   | Grouped [(Symbol,Symbol)] -- ^ aggregation required for any column which is not grouped
-  | Framed
+  | Framed Grouping
+
+type family Over grp0 grp1 :: Constraint where
+  Over grp grp = ()
+  Over ('Framed grp) grp = ()
+  Over grp0 grp1 = TypeError ('Text "Can't use Over in this context")
 
 type family Aggregatable (grp :: Grouping) :: Constraint where
   Aggregatable 'Ungrouped = TypeError ('Text "Non-aggregate expression")
   Aggregatable ('Grouped bys) = ()
-  Aggregatable 'Framed = ()
+  Aggregatable ('Framed grp) = ()
 
 {- | A `GroupedBy` constraint indicates that a table qualified column is
 a member of the auxiliary namespace created by @GROUP BY@ clauses and thus,

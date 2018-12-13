@@ -849,7 +849,7 @@ table (tab `As` alias) = UnsafeFromClause $
 subquery
   :: Aliased (Query db params) query
   -> FromClause db params '[query]
-subquery = UnsafeFromClause . renderAliased (parenthesized . renderQuery)
+subquery = UnsafeFromClause . renderAliased (parenthesized . renderSQL)
 
 -- | `view` derives a table from a `View`.
 view

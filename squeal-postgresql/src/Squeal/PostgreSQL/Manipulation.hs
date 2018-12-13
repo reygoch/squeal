@@ -284,7 +284,7 @@ instance RenderSQL (QueryClause db params columns) where
       <+> "SELECT"
       <+> renderCommaSeparatedMaybe renderValuePartMaybe row0
       <+> renderSQL tab
-    Subquery qry -> renderQuery qry
+    Subquery qry -> renderSQL qry
     where
       renderSQLPartMaybe, renderValuePartMaybe
         :: ColumnExpression db params grp from column -> Maybe ByteString

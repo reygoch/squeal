@@ -152,6 +152,8 @@ module Squeal.PostgreSQL.Expression
   , denseRank
   , percentRank
   , cumeDist
+  , ntile
+  , lag
     -- * Sorting
   , SortExpression (..)
   , OrderBy (..)
@@ -572,8 +574,8 @@ unsafeUnaryOp op x = UnsafeExpression $ parenthesized $
 unsafeFunction
   :: ByteString
   -- ^ function
-  -> Expression db params grp from (xty)
-  -> Expression db params grp from (yty)
+  -> Expression db params grp0 from (xty)
+  -> Expression db params grp1 from (yty)
 unsafeFunction fun x = UnsafeExpression $
   fun <> parenthesized (renderSQL x)
 
@@ -582,8 +584,8 @@ unsafeVariadicFunction
   :: SListI elems
   => ByteString
   -- ^ function
-  -> NP (Expression db params grp from) elems
-  -> Expression db params grp from ret
+  -> NP (Expression db params grp0 from) elems
+  -> Expression db params grp1 from ret
 unsafeVariadicFunction fun x = UnsafeExpression $
   fun <> parenthesized (commaSeparated (hcollapse (hmap (K . renderSQL) x)))
 
@@ -1398,16 +1400,16 @@ aggregation
 -- | escape hatch to define aggregate functions
 unsafeAggregate
   :: ByteString -- ^ aggregate function
-  -> Expression db from 'Ungrouped params (xty)
-  -> Expression db from ('Grouped bys) params (yty)
+  -> Expression db params 'Ungrouped from (xty)
+  -> Expression db params ('Grouped bys) from (yty)
 unsafeAggregate fun x = UnsafeExpression $ mconcat
   [fun, "(", renderSQL x, ")"]
 
 -- | escape hatch to define aggregate functions over distinct values
 unsafeAggregateDistinct
   :: ByteString -- ^ aggregate function
-  -> Expression db from 'Ungrouped params (xty)
-  -> Expression db from ('Grouped bys) params (yty)
+  -> Expression db params 'Ungrouped from (xty)
+  -> Expression db params ('Grouped bys) from (yty)
 unsafeAggregateDistinct fun x = UnsafeExpression $ mconcat
   [fun, "(DISTINCT ", renderSQL x, ")"]
 
@@ -1420,9 +1422,9 @@ unsafeAggregateDistinct fun x = UnsafeExpression $ mconcat
 -- sum("col")
 sum_
   :: ty `In` PGNum
-  => Expression db from 'Ungrouped params (nullity ty)
+  => Expression db params 'Ungrouped from (nullity ty)
   -- ^ what to sum
-  -> Expression db from ('Grouped bys) params (nullity ty)
+  -> Expression db params ('Grouped bys) from (nullity ty)
 sum_ = unsafeAggregate "sum"
 
 -- | >>> :{
@@ -1434,18 +1436,18 @@ sum_ = unsafeAggregate "sum"
 -- sum(DISTINCT "col")
 sumDistinct
   :: ty `In` PGNum
-  => Expression db from 'Ungrouped params (nullity ty)
+  => Expression db params 'Ungrouped from (nullity ty)
   -- ^ what to sum
-  -> Expression db from ('Grouped bys) params (nullity ty)
+  -> Expression db params ('Grouped bys) from (nullity ty)
 sumDistinct = unsafeAggregateDistinct "sum"
 
 -- | A constraint for `PGType`s that you can take averages of and the resulting
 -- `PGType`.
 class PGAvg ty avg | ty -> avg where
   avg, avgDistinct
-    :: Expression db from 'Ungrouped params (nullity ty)
+    :: Expression db params 'Ungrouped from (nullity ty)
     -- ^ what to average
-    -> Expression db from ('Grouped bys) params (nullity avg)
+    -> Expression db params ('Grouped bys) from (nullity avg)
   avg = unsafeAggregate "avg"
   avgDistinct = unsafeAggregateDistinct "avg"
 instance PGAvg 'PGint2 'PGnumeric
@@ -1465,9 +1467,9 @@ instance PGAvg 'PGinterval 'PGinterval
 -- bit_and("col")
 bitAnd
   :: int `In` PGIntegral
-  => Expression db from 'Ungrouped params (nullity int)
+  => Expression db params 'Ungrouped from (nullity int)
   -- ^ what to aggregate
-  -> Expression db from ('Grouped bys) params (nullity int)
+  -> Expression db params ('Grouped bys) from (nullity int)
 bitAnd = unsafeAggregate "bit_and"
 
 -- | >>> :{
@@ -1479,9 +1481,9 @@ bitAnd = unsafeAggregate "bit_and"
 -- bit_or("col")
 bitOr
   :: int `In` PGIntegral
-  => Expression db from 'Ungrouped params (nullity int)
+  => Expression db params 'Ungrouped from (nullity int)
   -- ^ what to aggregate
-  -> Expression db from ('Grouped bys) params (nullity int)
+  -> Expression db params ('Grouped bys) from (nullity int)
 bitOr = unsafeAggregate "bit_or"
 
 -- | >>> :{
@@ -1493,9 +1495,9 @@ bitOr = unsafeAggregate "bit_or"
 -- bit_and(DISTINCT "col")
 bitAndDistinct
   :: int `In` PGIntegral
-  => Expression db from 'Ungrouped params (nullity int)
+  => Expression db params 'Ungrouped from (nullity int)
   -- ^ what to aggregate
-  -> Expression db from ('Grouped bys) params (nullity int)
+  -> Expression db params ('Grouped bys) from (nullity int)
 bitAndDistinct = unsafeAggregateDistinct "bit_and"
 
 -- | >>> :{
@@ -1507,9 +1509,9 @@ bitAndDistinct = unsafeAggregateDistinct "bit_and"
 -- bit_or(DISTINCT "col")
 bitOrDistinct
   :: int `In` PGIntegral
-  => Expression db from 'Ungrouped params (nullity int)
+  => Expression db params 'Ungrouped from (nullity int)
   -- ^ what to aggregate
-  -> Expression db from ('Grouped bys) params (nullity int)
+  -> Expression db params ('Grouped bys) from (nullity int)
 bitOrDistinct = unsafeAggregateDistinct "bit_or"
 
 -- | >>> :{
@@ -1520,9 +1522,9 @@ bitOrDistinct = unsafeAggregateDistinct "bit_or"
 -- :}
 -- bool_and("col")
 boolAnd
-  :: Expression db from 'Ungrouped params (nullity 'PGbool)
+  :: Expression db params 'Ungrouped from (nullity 'PGbool)
   -- ^ what to aggregate
-  -> Expression db from ('Grouped bys) params (nullity 'PGbool)
+  -> Expression db params ('Grouped bys) from (nullity 'PGbool)
 boolAnd = unsafeAggregate "bool_and"
 
 -- | >>> :{
@@ -1533,9 +1535,9 @@ boolAnd = unsafeAggregate "bool_and"
 -- :}
 -- bool_or("col")
 boolOr
-  :: Expression db from 'Ungrouped params (nullity 'PGbool)
+  :: Expression db params 'Ungrouped from (nullity 'PGbool)
   -- ^ what to aggregate
-  -> Expression db from ('Grouped bys) params (nullity 'PGbool)
+  -> Expression db params ('Grouped bys) from (nullity 'PGbool)
 boolOr = unsafeAggregate "bool_or"
 
 -- | >>> :{
@@ -1546,9 +1548,9 @@ boolOr = unsafeAggregate "bool_or"
 -- :}
 -- bool_and(DISTINCT "col")
 boolAndDistinct
-  :: Expression db from 'Ungrouped params (nullity 'PGbool)
+  :: Expression db params 'Ungrouped from (nullity 'PGbool)
   -- ^ what to aggregate
-  -> Expression db from ('Grouped bys) params (nullity 'PGbool)
+  -> Expression db params ('Grouped bys) from (nullity 'PGbool)
 boolAndDistinct = unsafeAggregateDistinct "bool_and"
 
 -- | >>> :{
@@ -1559,9 +1561,9 @@ boolAndDistinct = unsafeAggregateDistinct "bool_and"
 -- :}
 -- bool_or(DISTINCT "col")
 boolOrDistinct
-  :: Expression db from 'Ungrouped params (nullity 'PGbool)
+  :: Expression db params 'Ungrouped from (nullity 'PGbool)
   -- ^ what to aggregate
-  -> Expression db from ('Grouped bys) params (nullity 'PGbool)
+  -> Expression db params ('Grouped bys) from (nullity 'PGbool)
 boolOrDistinct = unsafeAggregateDistinct "bool_or"
 
 -- | A special aggregation that does not require an input
@@ -1569,7 +1571,7 @@ boolOrDistinct = unsafeAggregateDistinct "bool_or"
 -- >>> printSQL countStar
 -- count(*)
 countStar
-  :: Expression db from ('Grouped bys) params ('NotNull 'PGint8)
+  :: Expression db params ('Grouped bys) from ('NotNull 'PGint8)
 countStar = UnsafeExpression $ "count(*)"
 
 -- | >>> :{
@@ -1580,9 +1582,9 @@ countStar = UnsafeExpression $ "count(*)"
 -- :}
 -- count("col")
 count
-  :: Expression db from 'Ungrouped params ty
+  :: Expression db params 'Ungrouped from ty
   -- ^ what to count
-  -> Expression db from ('Grouped bys) params ('NotNull 'PGint8)
+  -> Expression db params ('Grouped bys) from ('NotNull 'PGint8)
 count = unsafeAggregate "count"
 
 -- | >>> :{
@@ -1593,9 +1595,9 @@ count = unsafeAggregate "count"
 -- :}
 -- count(DISTINCT "col")
 countDistinct
-  :: Expression db from 'Ungrouped params ty
+  :: Expression db params 'Ungrouped from ty
   -- ^ what to count
-  -> Expression db from ('Grouped bys) params ('NotNull 'PGint8)
+  -> Expression db params ('Grouped bys) from ('NotNull 'PGint8)
 countDistinct = unsafeAggregateDistinct "count"
 
 -- | synonym for `boolAnd`
@@ -1608,9 +1610,9 @@ countDistinct = unsafeAggregateDistinct "count"
 -- :}
 -- every("col")
 every
-  :: Expression db from 'Ungrouped params (nullity 'PGbool)
+  :: Expression db params 'Ungrouped from (nullity 'PGbool)
   -- ^ what to aggregate
-  -> Expression db from ('Grouped bys) params (nullity 'PGbool)
+  -> Expression db params ('Grouped bys) from (nullity 'PGbool)
 every = unsafeAggregate "every"
 
 -- | synonym for `boolAndDistinct`
@@ -1623,16 +1625,16 @@ every = unsafeAggregate "every"
 -- :}
 -- every(DISTINCT "col")
 everyDistinct
-  :: Expression db from 'Ungrouped params (nullity 'PGbool)
+  :: Expression db params 'Ungrouped from (nullity 'PGbool)
   -- ^ what to aggregate
-  -> Expression db from ('Grouped bys) params (nullity 'PGbool)
+  -> Expression db params ('Grouped bys) from (nullity 'PGbool)
 everyDistinct = unsafeAggregateDistinct "every"
 
 -- | minimum and maximum aggregation
 max_, min_, maxDistinct, minDistinct
-  :: Expression db from 'Ungrouped params (nullity ty)
+  :: Expression db params 'Ungrouped from (nullity ty)
   -- ^ what to aggregate
-  -> Expression db from ('Grouped bys) params (nullity ty)
+  -> Expression db params ('Grouped bys) from (nullity ty)
 max_ = unsafeAggregate "max"
 min_ = unsafeAggregate "min"
 maxDistinct = unsafeAggregateDistinct "max"
@@ -1652,28 +1654,28 @@ in
 :}
 rank() OVER (PARTITION BY "a")
 -}
-rank :: Expression db from 'Framed params ('NotNull 'PGint8)
+rank :: Expression db params ('Framed grp) from ('NotNull 'PGint8)
 rank = UnsafeExpression "rank()"
 
 {- | number of the current row within its partition, counting from 1
 >>> printSQL rowNumber
 row_number()
 -}
-rowNumber :: Expression db from 'Framed params ('NotNull 'PGint8)
+rowNumber :: Expression db params ('Framed grp) fro ('NotNull 'PGint8)
 rowNumber = UnsafeExpression "row_number()"
 
 {- | rank of the current row without gaps; this function counts peer groups
 >>> printSQL denseRank
 dense_rank()
 -}
-denseRank :: Expression db from 'Framed params ('NotNull 'PGint8)
+denseRank :: Expression db params ('Framed grp) from ('NotNull 'PGint8)
 denseRank = UnsafeExpression "dense_rank()"
 
 {- | relative rank of the current row: (rank - 1) / (total partition rows - 1)
 >>> printSQL percentRank
 percent_rank()
 -}
-percentRank :: Expression db from 'Framed params ('NotNull 'PGfloat8)
+percentRank :: Expression db params ('Framed grp) from ('NotNull 'PGfloat8)
 percentRank = UnsafeExpression "percent_rank()"
 
 {- | cumulative distribution: (number of partition rows
@@ -1681,19 +1683,52 @@ preceding or peer with current row) / total partition rows
 >>> printSQL cumeDist
 cume_dist()
 -}
-cumeDist :: Expression db from 'Framed params ('NotNull 'PGfloat8)
+cumeDist :: Expression db params ('Framed grp) from ('NotNull 'PGfloat8)
 cumeDist = UnsafeExpression "cume_dist()"
+
+{- | integer ranging from 1 to the argument value,
+dividing the partition as equally as possible
+>>> printSQL $ ntile 5
+ntile(5)
+-}
+ntile
+  :: Expression db params grp from ('NotNull 'PGint4)
+  -> Expression db params ('Framed grp) from ('NotNull 'PGint4)
+ntile = unsafeFunction "ntile"
+
+{- | returns value evaluated at the row that is offset rows before the current
+row within the partition; if there is no such row, instead return default
+(which must be of the same type as value). Both offset and default are evaluated
+with respect to the current row.
+>>> :{
+let
+  date :: Expression db params 'Ungrouped '["tab" ::: '["date" ::: 'NotNull 'PGdate]] ('NotNull 'PGdate)
+  date = #date
+:}
+
+>>> printSQL $ lag date 1 currentDate
+lag("date", 1, CURRENT_DATE)
+-}
+lag
+  :: Expression db params grp from ty
+    -- ^ value
+  -> Expression db params grp from ('NotNull 'PGint4)
+    -- ^ offset
+  -> Expression db params grp from ty
+    -- ^ default
+  -> Expression db params ('Framed grp) from ty
+lag value offset def =
+  unsafeVariadicFunction "lag" (value :* offset :* def :* Nil)
 
 data WindowExpression db params grp from ty where
   Over
-    :: Aggregatable agg
+    :: (Over agg grp, Aggregatable agg)
     => Expression db params agg from ty
     -> WindowDefinition db params grp from
     -> WindowExpression db params grp from ty
 instance RenderSQL (WindowExpression db params grp from ty) where
   renderSQL (agg `Over` windef) =
-    renderSQL agg <+> "OVER"
-    <+> parenthesized (renderSQL windef)
+    renderSQL agg <+> "OVER" <+> parenthesized (renderSQL windef)
 
 data WindowDefinition db params grp from where
   WindowDefinition
@@ -1701,15 +1736,6 @@ data WindowDefinition db params grp from where
     => NP (Expression db params grp from) bys
     -> [SortExpression db params grp from]
     -> WindowDefinition db params grp from
-
-class OrderBy expr where
-  orderBy
-    :: [SortExpression db params grp from]
-    -> expr db params grp from
-    -> expr db params grp from
-instance OrderBy WindowDefinition where
-  orderBy sortsR (WindowDefinition parts sortsL)
-    = WindowDefinition parts (sortsL ++ sortsR)
 
 instance RenderSQL (WindowDefinition db from grp params) where
   renderSQL (WindowDefinition part ord) =
@@ -1728,6 +1754,15 @@ partitionBy
   => NP (Expression db params grp from) bys
   -> WindowDefinition db params grp from
 partitionBy bys = WindowDefinition bys []
+
+class OrderBy expr where
+  orderBy
+    :: [SortExpression db params grp from]
+    -> expr db params grp from
+    -> expr db params grp from
+instance OrderBy WindowDefinition where
+  orderBy sortsR (WindowDefinition parts sortsL)
+    = WindowDefinition parts (sortsL ++ sortsR)
 
 {-----------------------------------------
 sort expressions
