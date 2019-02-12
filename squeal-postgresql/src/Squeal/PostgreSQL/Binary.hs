@@ -197,6 +197,7 @@ True
   , TypeInType
   , TypeOperators
   , UndecidableInstances
+  , UndecidableSuperClasses
 #-}
 
 module Squeal.PostgreSQL.Binary
@@ -582,7 +583,7 @@ instance {-# OVERLAPPING #-} FromArray array y
       Decoding.dimensionArray Vector.replicateM (fromArray @array @y)
 instance {-# OVERLAPPING #-} FromArray array y
   => FromArray ('Null ('PGvararray array)) (Maybe (Vector y)) where
-    fromArray = Just <$> 
+    fromArray = Just <$>
       Decoding.dimensionArray Vector.replicateM (fromArray @array @y)
 instance {-# OVERLAPPING #-}
   ( FromArray array y
@@ -659,4 +660,4 @@ replicateMN
   :: forall x xs m. (All ((~) x) xs, Monad m, SListI xs)
   => m x -> m (NP I xs)
 replicateMN mx = hsequence' $
-  hcpure (Proxy :: Proxy ((~) x)) (Comp (I <$> mx)) 
+  hcpure (Proxy :: Proxy ((~) x)) (Comp (I <$> mx))
