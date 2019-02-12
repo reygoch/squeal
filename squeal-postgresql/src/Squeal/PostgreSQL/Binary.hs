@@ -1,6 +1,5 @@
-{-# LANGUAGE
-    TypeFamilies
-#-}
+{-# LANGUAGE TypeFamilies            #-}
+{-# LANGUAGE UndecidableSuperClasses #-}
 
 {-|
 Module: Squeal.PostgreSQL.Binary
@@ -658,7 +657,7 @@ replicateMN
   :: forall x xs m. (All ((~) x) xs, Monad m, SListI xs)
   => m x -> m (NP I xs)
 replicateMN mx = hsequence' $
-  hcpure (Proxy :: Proxy ((~) x)) (Comp (I <$> mx)) 
+  hcpure (Proxy :: Proxy ((~) x)) (Comp (I <$> mx))
 
 {- | The `Json` newtype is an indication that the Haskell
 type it's applied to should be stored as a `PGjson`.
